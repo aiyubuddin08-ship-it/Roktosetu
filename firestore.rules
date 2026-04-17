@@ -1,0 +1,109 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    // 
+    // Collection: users
+    // Document ID: auth.uid
+    // Fields:
+    //   - uid: string (required)
+    //   - displayName: string (required)
+    //   - email: string (required)
+    //   - role: string (required, 'user'|'admin')
+    //   - bloodGroup: enum (required)
+    //   - isDonor: bool (required)
+    //   - donationsCount: number
+    //   - points: number
+    // 
+    // Collection: requests
+    // Fields:
+    //   - requesterId: string (required)
+    //   - bloodGroup: enum (required)
+    //   - status: enum (required, 'Active'|'Fulfilled'|'Cancelled')
+    //   - hospitalName: string
+    //   - urgency: enum
+    // 
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && (
+        request.auth.token.email == "aiyubuddin08@gmail.com" ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin')
+      );
+    }
+
+    function isValidUser(data) {
+      // Very permissive validation to avoid onboarding blocks
+      return data.uid is string && (data.role == 'user' || data.role == 'admin');
+    }
+
+    function isValidRequest(data) {
+      return data.requesterId is string && 
+             data.bloodGroup is string &&
+             data.status is string;
+    }
+
+    match /users/{userId} {
+      // Allow reading documents. For list queries, this allows the query if it doesn't violate other privacy
+      allow read: if isAuthenticated();
+      
+      // Allow user to create/update their own profile
+      allow create: if isOwner(userId) && isValidUser(request.resource.data) && (request.resource.data.role == 'user' || isAdmin());
+      
+      allow update: if (isOwner(userId) && (
+        (request.resource.data.role == resource.data.role || isAdmin()) &&
+        isValidUser(request.resource.data)
+      )) || isAdmin() || (
+        // Allow donors to be updated by the system/recipient during 'Mark as Donated'
+        isAuthenticated() && request.resource.data.diff(resource.data).affectedKeys()
+        .hasAny(['donationsCount', 'points', 'ratingCount', 'ratingAverage', 'lastDonated'])
+      );
+      
+      allow delete: if isAdmin();
+    }
+
+    match /requests/{requestId} {
+      allow read: if isAuthenticated();
+      
+      allow create: if isAuthenticated() && (request.resource.data.requesterId == request.auth.uid || isAdmin());
+                    
+      allow update: if isAuthenticated() && (
+        isAdmin() || 
+        (request.auth.uid == resource.data.requesterId) ||
+        // Allow marking as completed
+        request.resource.data.diff(resource.data).affectedKeys().hasAny(['status', 'completedAt', 'donorId'])
+      );
+      
+      allow delete: if isAdmin() || (isAuthenticated() && request.auth.uid == resource.data.requesterId);
+    }
+
+    match /directory/{entryId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    match /notifications/{notificationId} {
+      allow read: if isAuthenticated() && (request.auth.uid == resource.data.userId || isAdmin());
+      // Allow any authenticated user to create a notification (e.g., when requesting blood)
+      // or specifically for their own (unlikely to self-notify but allowed).
+      // In a real app, you might want more complex logic.
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated() && (request.auth.uid == resource.data.userId || isAdmin());
+      allow delete: if isAuthenticated() && (request.auth.uid == resource.data.userId || isAdmin());
+    }
+  }
+}

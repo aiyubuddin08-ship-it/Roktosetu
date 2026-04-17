@@ -1,0 +1,52 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile containing donor status and blood group",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "displayName": { "type": "string" },
+        "email": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "bloodGroup": { "type": "string", "enum": ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"] },
+        "location": { "type": "string" },
+        "isDonor": { "type": "boolean" },
+        "phoneNumber": { "type": "string" },
+        "lastDonated": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "displayName", "email", "bloodGroup", "isDonor"]
+    },
+    "BloodRequest": {
+      "title": "Blood Request",
+      "description": "Request for urgent blood donation",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "requesterId": { "type": "string" },
+        "requesterName": { "type": "string" },
+        "bloodGroup": { "type": "string", "enum": ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"] },
+        "location": { "type": "string" },
+        "hospitalName": { "type": "string" },
+        "urgency": { "type": "string", "enum": ["Low", "Normal", "High", "Critical"] },
+        "requiredDate": { "type": "string", "format": "date-time" },
+        "message": { "type": "string" },
+        "contactNumber": { "type": "string" },
+        "status": { "type": "string", "enum": ["Active", "Fulfilled", "Cancelled"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["requesterId", "bloodGroup", "location", "urgency", "requiredDate", "status"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profile data"
+    },
+    "/requests/{requestId}": {
+      "schema": "BloodRequest",
+      "description": "Public blood donation requests"
+    }
+  }
+}

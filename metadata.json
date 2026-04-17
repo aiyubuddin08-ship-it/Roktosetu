@@ -1,0 +1,6 @@
+{
+  "name": "RoktoSetu",
+  "description": "Connecting blood donors with those in need. Request blood, find donors, and save lives in real-time.",
+  "requestFramePermissions": ["geolocation"],
+  "majorCapabilities": ["Firebase Authentication", "Cloud Firestore", "Real-time Updates"]
+}
