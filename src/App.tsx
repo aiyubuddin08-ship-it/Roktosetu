@@ -5,6 +5,7 @@
 
 import React, { useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { SpeedInsights } from '@vercel/speed-insights/react';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { Layout } from './components/Layout';
@@ -14,7 +15,6 @@ import { Onboarding } from './pages/Onboarding';
 import { BloodRequests } from './pages/BloodRequests';
 import { DonorSearch } from './pages/DonorSearch';
 import { Profile } from './pages/Profile';
-import { Chat } from './pages/Chat';
 import { Leaderboard } from './pages/Leaderboard';
 import { Directory } from './pages/Directory';
 import { AdminDashboard } from './pages/AdminDashboard';
@@ -99,6 +99,7 @@ export default function App() {
         <AuthProvider>
           <NotificationProvider>
             <AppContent />
+            <SpeedInsights />
           </NotificationProvider>
         </AuthProvider>
       </ThemeProvider>
