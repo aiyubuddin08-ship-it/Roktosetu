@@ -14,10 +14,15 @@ const DIRECTORY_DATA: DirectoryItem[] = [
   { name: 'রেড ক্রিসেন্ট ব্লাড ব্যাংক', type: 'Blood Bank', location: 'ঢাকা (মোহাম্মদপুর)', phone: '০২-৯১১২২৩৩', availability: '২৪ ঘণ্টা' },
   { name: 'কোয়ান্টাম ব্লাড ল্যাব', type: 'Blood Bank', location: 'ঢাকা (শান্তিনগর)', phone: '০২-৯৩৫৩৩৩৩', availability: '২৪ ঘণ্টা' },
   { name: 'সন্ধানী ব্লাড ব্যাংক', type: 'Blood Bank', location: 'ঢাকা মেডিকেল কলেজ', phone: '০২-৫৫০৬১২৩৪', availability: '২৪ ঘণ্টা' },
+  { name: 'পুলিশ ব্লাড ব্যাংক', type: 'Blood Bank', location: 'রাজারবাগ, ঢাকা', phone: '০১৭৬৯৬৯০০০০', availability: '২৪ ঘণ্টা' },
   { name: 'আঞ্জুমান মফিদুল ইসলাম', type: 'Ambulance', location: 'ঢাকা (কাকরাইল)', phone: '০২-৯৩৩৩৩০১', availability: '২৪ ঘণ্টা' },
   { name: 'ফায়ার সার্ভিস কন্ট্রোল রুম', type: 'Ambulance', location: 'সারাদেশ', phone: '০২-৯৫৫৫৫৫৫', availability: '২৪ ঘণ্টা' },
   { name: 'ঢাকা মেডিকেল অ্যাম্বুলেন্স', type: 'Ambulance', location: 'ঢাকা', phone: '০১৯১১২২৩৩৪৪', availability: '২৪ ঘণ্টা' },
-  // Adding more would be better but these act as placeholders
+  { name: 'বরিশাল ব্লাড ব্যাংক', type: 'Blood Bank', location: 'বরিশাল সদর', phone: '০১৭৫২৫ ২৫২৫', availability: '২৪ ঘণ্টা' },
+  { name: 'রাজশাহী ব্লাড ব্যাংক', type: 'Blood Bank', location: 'রাজশাহী মেডিকেল', phone: '০১৮১৬০ ৪৪৯৪৯', availability: '২৪ ঘণ্টা' },
+  { name: 'চট্টগ্রাম ব্লাড ব্যাংক', type: 'Blood Bank', location: 'আন্দরকিল্লা, চট্টগ্রাম', phone: '০৩১-৬১২৩৪৪', availability: '২৪ ঘণ্টা' },
+  { name: 'সেন্ট জন অ্যাম্বুলেন্স', type: 'Ambulance', location: 'ঢাকা', phone: '০২-৯১৩১০১০', availability: '২৪ ঘণ্টা' },
+  { name: 'আল-মারকাজুল ইসলামি', type: 'Ambulance', location: 'ঢাকা (শ্যামলী)', phone: '০২-৯১২৭৮৬৭', availability: '২৪ ঘণ্টা' },
 ];
 
 export function Directory() {

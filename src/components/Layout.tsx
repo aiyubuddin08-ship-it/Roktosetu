@@ -1,6 +1,6 @@
 import React from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
-import { Home, Search, Heart, User, LogOut, Menu, X, Award, MapPin, Shield, Moon, Sun } from 'lucide-react';
+import { Home, Search, Heart, User, LogOut, Menu, X, Award, MapPin, Shield, Moon, Sun, MessageSquare } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { NotificationCenter } from './NotificationCenter';
@@ -157,8 +157,9 @@ export function Layout({ children }: { children: React.ReactNode }) {
           <p className="text-gray-500 dark:text-gray-400 font-bold flex items-center justify-center gap-2">
             যোগাযোগ: <a href="tel:01897971573" className="hover:text-red-600 dark:hover:text-red-500 transition-colors">০১৮৯৭৯৭১৫৭৩</a>
           </p>
-          <div className="pt-8 border-t border-gray-100 dark:border-gray-800 text-gray-400 dark:text-gray-600 text-sm font-medium">
-            © ২০২৬ রক্তসেতু। একটি অলাভজনক উদ্যোগ।
+          <div className="pt-8 border-t border-gray-100 dark:border-gray-800 text-gray-400 dark:text-gray-600 text-sm font-medium flex flex-col sm:flex-row items-center justify-center gap-4">
+            <span>© ২০২৬ রক্তসেতু। একটি অলাভজনক উদ্যোগ।</span>
+            <NavLink to="/privacy" className="text-red-600/70 hover:text-red-600 underline transition-colors">প্রাইভেসি পলিসি</NavLink>
           </div>
         </div>
       </footer>

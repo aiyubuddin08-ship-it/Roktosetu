@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { collection, query, where, onSnapshot } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, getDocs, addDoc, Timestamp, doc, setDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { useAuth } from '../contexts/AuthContext';
+import { useNavigate } from 'react-router-dom';
 import { UserProfile, BloodGroup, OperationType } from '../types';
 import { handleFirestoreError } from '../lib/error-handler';
-import { Search, MapPin, Heart, Phone, Filter, Users } from 'lucide-react';
+import { Search, MapPin, Heart, Phone, Filter, Users, MessageCircle } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../lib/utils';
 import { DIVISIONS, Division, District } from '../constants/locations';
@@ -13,6 +14,7 @@ const BLOOD_GROUPS: BloodGroup[] = ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 
 
 export function DonorSearch() {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const [donors, setDonors] = useState<UserProfile[]>([]);
   const [loading, setLoading] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
@@ -194,16 +196,43 @@ export function DonorSearch() {
                     </div>
 
                     <div className="space-y-4 pt-6 border-t border-gray-100">
-                      <div className="flex items-center gap-3 text-gray-500 font-bold text-sm">
-                        <MapPin className="w-4 h-4 text-red-400" />
-                        <span className="truncate">{donor.location.upazila}, {donor.location.district}</span>
+                      <div className="flex flex-col gap-2">
+                        <div className="flex items-center gap-3 text-gray-500 font-bold text-sm">
+                          <MapPin className="w-4 h-4 text-red-400" />
+                          <span className="truncate">{donor.location.upazila}, {donor.location.district}</span>
+                        </div>
+                        {donor.lastDonated && (
+                          <div className={cn(
+                            "text-[10px] font-black uppercase tracking-widest px-3 py-1 rounded-full w-fit",
+                            (() => {
+                              const lastDonatedDate = new Date(donor.lastDonated);
+                              const fourMonthsAgo = new Date();
+                              fourMonthsAgo.setMonth(fourMonthsAgo.getMonth() - 4);
+                              return lastDonatedDate < fourMonthsAgo 
+                                ? "bg-green-100 text-green-700"
+                                : "bg-orange-100 text-orange-700";
+                            })()
+                          )}>
+                            {(() => {
+                              const lastDonatedDate = new Date(donor.lastDonated);
+                              const fourMonthsAgo = new Date();
+                              fourMonthsAgo.setMonth(fourMonthsAgo.getMonth() - 4);
+                              return lastDonatedDate < fourMonthsAgo 
+                                ? "রক্তদানের যোগ্য"
+                                : `পরবর্তী রক্তদান: ${new Date(lastDonatedDate.setMonth(lastDonatedDate.getMonth() + 4)).toLocaleDateString('bn-BD')}`;
+                            })()}
+                          </div>
+                        )}
                       </div>
-                      <a
-                        href={`tel:${donor.phoneNumber}`}
-                        className="flex items-center gap-3 w-full justify-center py-4 bg-green-600 text-white rounded-2xl font-black hover:bg-green-700 transition shadow-xl shadow-green-100 active:scale-95"
-                      >
-                        <Phone className="w-4 h-4" /> কল করুন
-                      </a>
+                      
+                      <div className="flex gap-2">
+                        <a
+                          href={`tel:${donor.phoneNumber}`}
+                          className="w-full flex items-center gap-3 justify-center py-4 bg-green-600 text-white rounded-2xl font-black hover:bg-green-700 transition shadow-xl shadow-green-100 active:scale-95"
+                        >
+                          <Phone className="w-4 h-4" /> সরাসরি কল দিন
+                        </a>
+                      </div>
                     </div>
                   </div>
                 </motion.div>

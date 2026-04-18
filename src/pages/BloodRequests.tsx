@@ -45,20 +45,16 @@ export function BloodRequests() {
   const [selectedDonorId, setSelectedDonorId] = useState<string>('');
   const [processingCompletion, setProcessingCompletion] = useState(false);
 
-  const handleShare = async (req: BloodRequest) => {
-    const text = `রক্তের অনুরোধ: ${req.bloodGroup} রক্ত প্রয়োজন। \nহাসপাতাল: ${req.hospitalName}\nঅবস্থান: ${req.location.upazila}, ${req.location.district}\nযোগাযোগ: ${req.contactNumber}\n\nরক্তসেতু অ্যাপের মাধ্যমে রক্ত দান করুন।`;
-    if (navigator.share) {
-      try {
-        await navigator.share({
-          title: 'রক্তের অনুরোধ - রক্তসেতু',
-          text: text,
-          url: window.location.href
-        });
-      } catch (err) {
-        console.error('Error sharing:', err);
-      }
+  const handleShare = (req: BloodRequest, platform: 'wa' | 'fb' | 'clipboard') => {
+    const text = `রক্তের অনুরোধ: ${req.bloodGroup} রক্ত প্রয়োজন। \nহাসপাতাল: ${req.hospitalName}\nঅবস্থান: ${req.location.upazila}, ${req.location.district}\nরক্ত প্রয়োজন: ${req.requiredDate}\nযোগাযোগ: ${req.contactNumber}\n\nরক্তসেতু অ্যাপের মাধ্যমে রক্ত দান করুন।`;
+    const url = window.location.origin;
+
+    if (platform === 'wa') {
+      window.open(`https://wa.me/?text=${encodeURIComponent(text + '\n' + url)}`, '_blank');
+    } else if (platform === 'fb') {
+      window.open(`https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(url)}&quote=${encodeURIComponent(text)}`, '_blank');
     } else {
-      navigator.clipboard.writeText(text);
+      navigator.clipboard.writeText(text + '\n' + url);
       alert('সফলভাবে কপি হয়েছে!');
     }
   };
@@ -358,12 +354,29 @@ export function BloodRequests() {
                       >
                         <Phone className="w-5 h-5" /> কল করুন
                       </a>
-                      <button
-                        onClick={() => handleShare(req)}
-                        className="p-4 bg-gray-50 text-gray-500 rounded-2xl hover:bg-gray-100 hover:text-red-600 transition-all font-black flex items-center gap-2"
-                      >
-                        <Share2 className="w-5 h-5" /> শেয়ার
-                      </button>
+                      <div className="flex items-center gap-1.5 p-1 bg-gray-50 rounded-2xl">
+                        <button
+                          onClick={() => handleShare(req, 'wa')}
+                          className="p-3 bg-[#25D366] text-white rounded-xl hover:scale-110 transition-transform shadow-lg shadow-green-100"
+                          title="WhatsApp"
+                        >
+                          <svg className="w-5 h-5 fill-current" viewBox="0 0 24 24"><path d="M12.031 6.172c-3.181 0-5.767 2.586-5.768 5.766-.001 1.298.38 2.27 1.019 3.287l-.582 2.128 2.182-.573c.978.58 1.911.928 3.145.929 3.178 0 5.767-2.587 5.768-5.766.001-3.187-2.575-5.771-5.764-5.771zm3.392 8.244c-.144.405-.837.774-1.17.824-.299.045-.677.063-1.092-.069-.252-.08-.575-.187-.988-.365-1.739-.747-2.874-2.512-2.96-2.626-.087-.115-.708-.941-.708-1.797 0-.855.448-1.274.607-1.446.159-.172.346-.215.461-.215.115 0 .231.001.332.006.106.005.249-.04.391.297.144.346.491 1.2.534 1.287.043.087.072.188.014.304-.058.115-.087.188-.173.289l-.26.304c-.087.101-.177.211-.077.383.1.173.444.731.953 1.185.656.584 1.209.765 1.382.851.173.086.274.072.376-.043.101-.115.433-.505.548-.678.115-.173.231-.144.39-.087.159.058 1.011.477 1.184.563.173.087.289.129.332.202.043.073.043.419-.101.824zM12 2C6.477 2 2 6.477 2 12c0 1.891.524 3.66 1.435 5.17L2 22l4.958-1.3c1.514.858 3.257 1.3 5.042 1.3 5.523 0 10-4.477 10-10S17.523 2 12 2z"/></svg>
+                        </button>
+                        <button
+                          onClick={() => handleShare(req, 'fb')}
+                          className="p-3 bg-[#1877F2] text-white rounded-xl hover:scale-110 transition-transform shadow-lg shadow-blue-100"
+                          title="Facebook"
+                        >
+                          <svg className="w-5 h-5 fill-current" viewBox="0 0 24 24"><path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/></svg>
+                        </button>
+                        <button
+                          onClick={() => handleShare(req, 'clipboard')}
+                          className="p-3 bg-gray-200 text-gray-600 rounded-xl hover:scale-110 transition-transform"
+                          title="Copy Link"
+                        >
+                          <Share2 className="w-5 h-5" />
+                        </button>
+                      </div>
                       {user?.uid === req.requesterId && (
                         <div className="flex items-center gap-2">
                            <button

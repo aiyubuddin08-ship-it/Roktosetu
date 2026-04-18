@@ -5,12 +5,13 @@ import { db } from '../lib/firebase';
 import { OperationType, BloodGroup } from '../types';
 import { handleFirestoreError } from '../lib/error-handler';
 import { cn } from '../lib/utils';
-import { Heart, MapPin, Phone, User as UserIcon, Calendar, CheckCircle, Save, LogOut, Award, Star, TrendingUp, Camera, Loader2 } from 'lucide-react';
+import { Heart, MapPin, Phone, User as UserIcon, Calendar, CheckCircle, Save, LogOut, Award, Star, TrendingUp, Camera, Loader2, Droplets } from 'lucide-react';
 import { DIVISIONS, District } from '../constants/locations';
 import { auth, storage } from '../lib/firebase';
 import { signOut } from 'firebase/auth';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { motion, AnimatePresence } from 'motion/react';
+import { DonorCard } from '../components/DonorCard';
 
 const BLOOD_GROUPS: BloodGroup[] = ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'];
 
@@ -201,6 +202,27 @@ export function Profile() {
            </div>
         </div>
       </div>
+
+      {profile.isDonor && (
+        <section className="bg-white dark:bg-gray-900 p-10 rounded-[40px] border border-gray-100 dark:border-gray-800 shadow-2xl transition-colors">
+           <div className="flex flex-col md:flex-row gap-12 items-center">
+              <div className="flex-1 space-y-6 text-center md:text-left">
+                 <h2 className="text-3xl font-black text-gray-900 dark:text-white">আপনার ডিজিটাল ডোনার কার্ড</h2>
+                 <p className="text-lg text-gray-500 dark:text-gray-400 font-medium font-bangla">
+                    এই কার্ডটি আপনার রক্তদাতা হিসেবে একটি ভার্চুয়াল পরিচিতি। যেকোনো প্রয়োজনে এটি প্রদর্শন করতে পারবেন। 
+                    নিচে থাকা কিউআর কোডটি স্ক্যান করলে আপনার প্রোফাইল ভেরিফাই করা যাবে।
+                 </p>
+                 <div className="flex items-center gap-4 p-4 bg-red-50 dark:bg-red-900/10 rounded-3xl border border-red-100 dark:border-red-900/20">
+                    <Droplets className="w-8 h-8 text-red-600 grow-0 shrink-0" />
+                    <p className="text-sm font-bold text-red-900 dark:text-red-400">রক্তদান বীর হিসেবে আপনি আমাদের গর্ব। নিয়মিত রক্ত দিন, জীবন বাঁচান।</p>
+                 </div>
+              </div>
+              <div className="shrink-0 w-full md:w-auto">
+                 <DonorCard donor={profile} />
+              </div>
+           </div>
+        </section>
+      )}
 
       <div className="bg-white dark:bg-gray-900 rounded-[40px] border border-gray-100 dark:border-gray-800 shadow-2xl overflow-hidden transition-colors">
         <div className="p-8 border-b border-gray-100 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-800/30 flex items-center justify-between">

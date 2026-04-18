@@ -105,5 +105,26 @@ service cloud.firestore {
       allow update: if isAuthenticated() && (request.auth.uid == resource.data.userId || isAdmin());
       allow delete: if isAuthenticated() && (request.auth.uid == resource.data.userId || isAdmin());
     }
+
+    match /chats/{chatId} {
+      // Allow reading chats if the user is a participant
+      allow read: if isAuthenticated() && request.auth.uid in resource.data.participants;
+      
+      // Allow creating a chat if the current user is one of the participants
+      allow create: if isAuthenticated() && request.auth.uid in request.resource.data.participants;
+      
+      // Allow updating a chat (to update lastMessage/updatedAt) if participant
+      allow update: if isAuthenticated() && request.auth.uid in resource.data.participants;
+
+      match /messages/{messageId} {
+        // Inherit or explicitly check chat participation for messages
+        allow read: if isAuthenticated() && request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants;
+        
+        // Allow sending a message if participant and senderId is correctly set
+        allow create: if isAuthenticated() && 
+          request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants &&
+          request.resource.data.senderId == request.auth.uid;
+      }
+    }
   }
 }

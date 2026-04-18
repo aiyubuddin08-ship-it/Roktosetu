@@ -14,9 +14,11 @@ import { Onboarding } from './pages/Onboarding';
 import { BloodRequests } from './pages/BloodRequests';
 import { DonorSearch } from './pages/DonorSearch';
 import { Profile } from './pages/Profile';
+import { Chat } from './pages/Chat';
 import { Leaderboard } from './pages/Leaderboard';
 import { Directory } from './pages/Directory';
 import { AdminDashboard } from './pages/AdminDashboard';
+import { PrivacyPolicy } from './pages/PrivacyPolicy';
 import { Heart } from 'lucide-react';
 
 import { seedSampleData } from './lib/seed';
@@ -51,6 +53,7 @@ function AppContent() {
       <Router>
         <Routes>
           <Route path="/" element={<Home />} />
+          <Route path="/privacy" element={<PrivacyPolicy />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Router>
@@ -78,6 +81,7 @@ function AppContent() {
           <Route path="/directory" element={<Directory />} />
           <Route path="/admin-panel" element={<AdminDashboard />} />
           <Route path="/profile" element={<Profile />} />
+          <Route path="/privacy" element={<PrivacyPolicy />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Layout>
