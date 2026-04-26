@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Bell, Check, Trash2, ExternalLink, Calendar, Info, CheckCircle, AlertTriangle, XCircle } from 'lucide-react';
+import { Bell, Check, Trash2, ExternalLink, Calendar, Info, CheckCircle, AlertTriangle, XCircle, Award, Heart, ShieldCheck } from 'lucide-react';
 import { useNotifications } from '../contexts/NotificationContext';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../lib/utils';
@@ -25,6 +25,9 @@ export function NotificationCenter() {
 
   const getIcon = (type: string) => {
     switch (type) {
+      case 'Badge Earned': return <Award className="w-5 h-5 text-yellow-500" />;
+      case 'New Request': return <Heart className="w-5 h-5 text-red-500" />;
+      case 'Eligibility': return <ShieldCheck className="w-5 h-5 text-green-500" />;
       case 'success': return <CheckCircle className="w-5 h-5 text-green-500" />;
       case 'warning': return <AlertTriangle className="w-5 h-5 text-orange-500" />;
       case 'error': return <XCircle className="w-5 h-5 text-red-500" />;
@@ -77,7 +80,7 @@ export function NotificationCenter() {
             <div className="max-h-[70vh] overflow-y-auto custom-scrollbar">
               {notifications.length > 0 ? (
                 <div className="divide-y divide-gray-50 dark:divide-gray-800">
-                  {notifications.map((notification) => (
+                  {notifications.slice(0, 5).map((notification) => (
                     <div
                       key={notification.id}
                       onClick={() => handleNotificationClick(notification)}
@@ -116,6 +119,18 @@ export function NotificationCenter() {
                 </div>
               )}
             </div>
+
+            {notifications.length > 0 && (
+               <button 
+                onClick={() => {
+                  navigate('/notifications');
+                  setIsOpen(false);
+                }}
+                className="w-full py-4 bg-gray-50 dark:bg-gray-800/50 text-red-600 dark:text-red-400 font-black text-sm uppercase tracking-widest border-t border-gray-100 dark:border-gray-800 hover:bg-red-50 dark:hover:bg-red-900/10 transition-all"
+               >
+                 সবগুলো দেখুন
+               </button>
+            )}
           </motion.div>
         )}
       </AnimatePresence>

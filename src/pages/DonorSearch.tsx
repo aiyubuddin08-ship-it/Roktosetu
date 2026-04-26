@@ -5,7 +5,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import { UserProfile, BloodGroup, OperationType } from '../types';
 import { handleFirestoreError } from '../lib/error-handler';
-import { Search, MapPin, Heart, Phone, Filter, Users, MessageCircle } from 'lucide-react';
+import { Search, MapPin, Heart, Phone, Filter, Users, LogOut } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../lib/utils';
 import { DIVISIONS, Division, District } from '../constants/locations';
@@ -75,185 +75,189 @@ export function DonorSearch() {
   };
 
   return (
-    <div className="space-y-10 pb-20">
-      <section className="text-center space-y-4 max-w-2xl mx-auto">
-        <h1 className="text-4xl font-black text-gray-900 leading-tight">রক্তদাতা খুঁজুন</h1>
-        <p className="text-gray-500 text-lg font-medium">আপনার নিকটস্থ রক্তদাতাদের সাথে যোগাযোগ করুন এবং জীবন বাঁচান।</p>
-      </section>
-
-      {/* Filters Card */}
-      <div className="bg-white p-10 rounded-[40px] shadow-2xl border border-gray-100 animate-slide-up">
-        <div className="flex items-center gap-3 mb-8 text-red-600">
-           <Filter className="w-6 h-6" />
-           <h2 className="text-xl font-black uppercase tracking-widest">ফিল্টার করুন</h2>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8">
-          <div>
-            <label className="block text-xs font-black text-gray-400 uppercase tracking-widest mb-3">রক্তের গ্রুপ</label>
-            <div className="grid grid-cols-4 gap-2">
-              {BLOOD_GROUPS.map((group) => (
-                <button
-                  key={group}
-                  onClick={() => setBloodGroup(group)}
-                  className={cn(
-                    "py-2 text-sm font-black rounded-xl border-2 transition-all",
-                    bloodGroup === group
-                      ? "bg-red-600 border-red-600 text-white shadow-lg"
-                      : "bg-white border-gray-50 text-gray-500 hover:border-red-200"
-                  )}
-                >
-                  {group}
+    <div className="max-w-4xl mx-auto pb-32 -mt-8 -mx-4 sm:-mx-6 lg:-mx-8 animate-fade-in bg-gray-50 dark:bg-gray-950 min-h-screen">
+       {/* Header Section */}
+       <section className="bg-brand pt-16 pb-8 px-6 relative overflow-hidden">
+          <div className="absolute top-0 right-0 w-64 h-64 bg-white/10 rounded-full -mr-32 -mt-32 blur-3xl" />
+          <div className="max-w-xl mx-auto relative z-10">
+             <div className="flex items-center gap-4 mb-4">
+                <button onClick={() => navigate(-1)} className="p-2 -ml-2 text-white">
+                   <LogOut className="w-6 h-6 rotate-180" />
                 </button>
-              ))}
-            </div>
+                <h1 className="text-2xl font-black text-white">রক্তদাতা খুঁজুন</h1>
+             </div>
+             <p className="text-white/80 font-medium text-sm">নিকটস্থ রক্তদাতাদের সাথে যোগাযোগ করুন এবং সঠিক সময়ে রক্ত সংগ্রহ নিশ্চিত করুন।</p>
           </div>
+       </section>
 
-          <div className="space-y-3">
-             <label className="block text-xs font-black text-gray-400 uppercase tracking-widest">বিভাগ</label>
-             <select
-                value={division}
-                onChange={(e) => setDivision(e.target.value)}
-                className="w-full px-5 py-3.5 bg-gray-50 border-none rounded-2xl focus:ring-2 focus:ring-red-500 outline-none font-bold text-gray-700"
-              >
-                <option value="">সবগুলো</option>
-                {DIVISIONS.map(d => <option key={d.id} value={d.name}>{d.bnName}</option>)}
-              </select>
-          </div>
-
-          <div className="space-y-3">
-             <label className="block text-xs font-black text-gray-400 uppercase tracking-widest">জেলা</label>
-             <select
-                disabled={!division}
-                value={district}
-                onChange={(e) => setDistrict(e.target.value)}
-                className="w-full px-5 py-3.5 bg-gray-50 border-none rounded-2xl focus:ring-2 focus:ring-red-500 outline-none font-bold text-gray-700 disabled:opacity-50"
-              >
-                <option value="">সবগুলো</option>
-                {districts.map(d => <option key={d.id} value={d.name}>{d.bnName}</option>)}
-              </select>
-          </div>
-
-          <div className="space-y-3">
-             <label className="block text-xs font-black text-gray-400 uppercase tracking-widest">উপজেলা</label>
-             <select
-                disabled={!district}
-                value={upazila}
-                onChange={(e) => setUpazila(e.target.value)}
-                className="w-full px-5 py-3.5 bg-gray-50 border-none rounded-2xl focus:ring-2 focus:ring-red-500 outline-none font-bold text-gray-700 disabled:opacity-50"
-              >
-                <option value="">সবগুলো</option>
-                {upazilas.map(u => <option key={u.id} value={u.name}>{u.bnName}</option>)}
-              </select>
-          </div>
-        </div>
-
-        <button
-          onClick={handleSearch}
-          className="w-full mt-10 py-5 bg-red-600 text-white rounded-[24px] font-black text-xl hover:bg-red-700 transition shadow-2xl shadow-red-500/30 flex items-center justify-center gap-3 active:scale-95"
-        >
-          <Search className="w-6 h-6" /> ডোনার খুঁজুন
-        </button>
-      </div>
-
-      {/* Results */}
-      <div className="space-y-8">
-        {hasSearched && (
-          <h3 className="text-xl font-black text-gray-900 px-2 flex items-center gap-2">
-            <Users className="w-6 h-6 text-red-600" /> অনুসন্ধান ফলাফল ({donors.length})
-          </h3>
-        )}
-
-        {loading ? (
-          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-8 text-center">
-            {[1, 2, 3].map(i => (
-              <div key={i} className="h-48 bg-white rounded-[40px] shimmer border border-gray-100" />
-            ))}
-          </div>
-        ) : donors.length > 0 ? (
-          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-8">
-            <AnimatePresence>
-              {donors.map((donor) => (
-                <motion.div
-                  key={donor.uid}
-                  layout
-                  initial={{ opacity: 0, scale: 0.9 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  className="bg-white rounded-[40px] shadow-xl border border-gray-50 overflow-hidden group hover:shadow-2xl transition-all"
-                >
-                  <div className="p-8">
-                    <div className="flex items-center gap-5 mb-6">
-                      <div className="w-20 h-20 rounded-3xl bg-red-50 flex items-center justify-center text-red-600 font-black text-3xl shadow-inner group-hover:bg-red-600 group-hover:text-white transition-all duration-500">
-                        {donor.bloodGroup}
-                      </div>
-                      <div>
-                        <h4 className="text-xl font-black text-gray-900 line-clamp-1">{donor.displayName}</h4>
-                        <div className="flex items-center gap-1.5 text-red-600 mt-1">
-                           <Heart className="w-4 h-4 fill-current" />
-                           <span className="text-xs font-black uppercase tracking-widest leading-none mt-0.5">রক্তদাতা</span>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="space-y-4 pt-6 border-t border-gray-100">
-                      <div className="flex flex-col gap-2">
-                        <div className="flex items-center gap-3 text-gray-500 font-bold text-sm">
-                          <MapPin className="w-4 h-4 text-red-400" />
-                          <span className="truncate">{donor.location.upazila}, {donor.location.district}</span>
-                        </div>
-                        {donor.lastDonated && (
-                          <div className={cn(
-                            "text-[10px] font-black uppercase tracking-widest px-3 py-1 rounded-full w-fit",
-                            (() => {
-                              const lastDonatedDate = new Date(donor.lastDonated);
-                              const fourMonthsAgo = new Date();
-                              fourMonthsAgo.setMonth(fourMonthsAgo.getMonth() - 4);
-                              return lastDonatedDate < fourMonthsAgo 
-                                ? "bg-green-100 text-green-700"
-                                : "bg-orange-100 text-orange-700";
-                            })()
-                          )}>
-                            {(() => {
-                              const lastDonatedDate = new Date(donor.lastDonated);
-                              const fourMonthsAgo = new Date();
-                              fourMonthsAgo.setMonth(fourMonthsAgo.getMonth() - 4);
-                              return lastDonatedDate < fourMonthsAgo 
-                                ? "রক্তদানের যোগ্য"
-                                : `পরবর্তী রক্তদান: ${new Date(lastDonatedDate.setMonth(lastDonatedDate.getMonth() + 4)).toLocaleDateString('bn-BD')}`;
-                            })()}
-                          </div>
+       <div className="max-w-xl mx-auto px-6 -mt-6">
+          {/* Search Filters Card */}
+          <div className="bg-white dark:bg-gray-900 rounded-[40px] shadow-2xl card-shadow border border-gray-50 dark:border-gray-800 p-8 space-y-8 relative z-20">
+             {/* Blood Group Selection */}
+             <div className="space-y-4">
+                <label className="text-xs font-black text-gray-400 dark:text-gray-500 uppercase tracking-widest block px-2">রক্তের গ্রুপ *</label>
+                <div className="grid grid-cols-4 gap-2">
+                   {BLOOD_GROUPS.map(group => (
+                      <button
+                        key={group}
+                        type="button"
+                        onClick={() => setBloodGroup(group)}
+                        className={cn(
+                          "py-3 rounded-[16px] text-sm font-black transition-all border-2",
+                          bloodGroup === group 
+                            ? "bg-brand border-brand text-white shadow-lg shadow-brand/20" 
+                            : "bg-gray-50 dark:bg-gray-800 border-transparent text-gray-400"
                         )}
-                      </div>
-                      
-                      <div className="flex gap-2">
-                        <a
-                          href={`tel:${donor.phoneNumber}`}
-                          className="w-full flex items-center gap-3 justify-center py-4 bg-green-600 text-white rounded-2xl font-black hover:bg-green-700 transition shadow-xl shadow-green-100 active:scale-95"
-                        >
-                          <Phone className="w-4 h-4" /> সরাসরি কল দিন
-                        </a>
-                      </div>
-                    </div>
-                  </div>
-                </motion.div>
-              ))}
-            </AnimatePresence>
+                      >
+                         {group}
+                      </button>
+                   ))}
+                </div>
+             </div>
+
+             {/* Location Filters */}
+             <div className="space-y-6">
+                <div className="relative">
+                   <div className="absolute -top-1 left-4 px-2 bg-white dark:bg-gray-900 text-[10px] font-black text-gray-400 uppercase tracking-widest z-10 italic">বিভাগ</div>
+                   <select 
+                     value={division} 
+                     onChange={(e) => setDivision(e.target.value)}
+                     className="w-full bg-gray-50 dark:bg-gray-800/50 px-6 py-5 rounded-[24px] border border-gray-100 dark:border-gray-800 outline-none font-bold text-gray-700 dark:text-gray-300 appearance-none transition-all focus:border-brand"
+                   >
+                      <option value="">বিভাগ নির্বাচন করুন</option>
+                      {DIVISIONS.map(d => <option key={d.id} value={d.name}>{d.bnName}</option>)}
+                   </select>
+                </div>
+
+                <div className="relative">
+                   <div className="absolute -top-1 left-4 px-2 bg-white dark:bg-gray-900 text-[10px] font-black text-gray-400 uppercase tracking-widest z-10 italic">জেলা</div>
+                   <select 
+                     value={district} 
+                     disabled={!division}
+                     onChange={(e) => setDistrict(e.target.value)}
+                     className="w-full bg-gray-50 dark:bg-gray-800/50 px-6 py-5 rounded-[24px] border border-gray-100 dark:border-gray-800 outline-none font-bold text-gray-700 dark:text-gray-300 appearance-none disabled:opacity-50 transition-all focus:border-brand"
+                   >
+                      <option value="">জেলা নির্বাচন করুন</option>
+                      {districts.map(d => <option key={d.id} value={d.name}>{d.bnName}</option>)}
+                   </select>
+                </div>
+
+                <div className="relative">
+                   <div className="absolute -top-1 left-4 px-2 bg-white dark:bg-gray-900 text-[10px] font-black text-gray-400 uppercase tracking-widest z-10 italic">উপজেলা</div>
+                   <select 
+                     value={upazila} 
+                     disabled={!district}
+                     onChange={(e) => setUpazila(e.target.value)}
+                     className="w-full bg-gray-50 dark:bg-gray-800/50 px-6 py-5 rounded-[24px] border border-gray-100 dark:border-gray-800 outline-none font-bold text-gray-700 dark:text-gray-300 appearance-none disabled:opacity-50 transition-all focus:border-brand"
+                   >
+                      <option value="">উপজেলা নির্বাচন করুন</option>
+                      {upazilas.map(u => <option key={u.id} value={u.name}>{u.bnName}</option>)}
+                   </select>
+                </div>
+             </div>
+
+             <button
+               onClick={handleSearch}
+               disabled={loading}
+               className="w-full py-6 bg-brand text-white font-black text-lg rounded-[28px] shadow-2xl shadow-brand/30 hover:bg-brand/90 transition-all active:scale-95 disabled:opacity-50 flex items-center justify-center gap-3"
+             >
+                <Search className="w-6 h-6" /> {loading ? 'অনুসন্ধান হচ্ছে...' : 'ডোনার খুঁজুন'}
+             </button>
           </div>
-        ) : hasSearched ? (
-          <div className="bg-white p-20 rounded-[40px] text-center border-2 border-dashed border-gray-200">
-            <div className="w-24 h-24 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-6">
-               <Search className="w-10 h-10 text-gray-300" />
-            </div>
-            <p className="text-gray-400 text-xl font-bold">দুঃখিত, কোনো ম্যাচিং ডোনার পাওয়া যায়নি</p>
-            <p className="text-gray-400 mt-2">অন্য কোনো এলাকা বা রক্তের গ্রুপ দিয়ে চেষ্টা করুন</p>
+
+          {/* Results Section */}
+          <div className="mt-12 space-y-6">
+             <div className="flex items-center justify-between px-2">
+                <h3 className="text-xl font-black text-gray-900 dark:text-white flex items-center gap-2">
+                   <Users className="w-6 h-6 text-brand" /> {hasSearched ? `ফলাফল (${donors.length})` : 'রক্তদাতা তালিকা'}
+                </h3>
+             </div>
+
+             {loading ? (
+                <div className="space-y-4">
+                   {[1, 2, 3].map(i => <div key={i} className="h-32 bg-white dark:bg-gray-900 rounded-[40px] animate-pulse shadow-sm" />)}
+                </div>
+             ) : donors.length > 0 ? (
+                <div className="space-y-4">
+                   <AnimatePresence>
+                      {donors.map((donor) => (
+                         <motion.div
+                           key={donor.uid}
+                           layout
+                           initial={{ opacity: 0, y: 20 }}
+                           animate={{ opacity: 1, y: 0 }}
+                           className="bg-white dark:bg-gray-900 rounded-[40px] p-6 shadow-lg card-shadow border border-gray-50 dark:border-gray-800 flex items-center gap-4 group"
+                         >
+                            <div className="w-16 h-16 bg-[#FEF2F2] dark:bg-brand/10 rounded-[20px] flex items-center justify-center text-brand font-black text-2xl shadow-sm group-hover:bg-brand group-hover:text-white transition-all duration-300">
+                               {donor.bloodGroup}
+                            </div>
+                            <div className="flex-1">
+                               <h4 className="text-lg font-black text-gray-900 dark:text-white line-clamp-1">{donor.displayName}</h4>
+                               <div className="flex items-center gap-3 mt-1">
+                                  <div className="flex items-center gap-1.5 text-brand/60 font-bold text-[10px] uppercase tracking-wider">
+                                     <MapPin className="w-3 h-3" />
+                                     <span>{donor.privacySettings?.hideLocation 
+                                          ? "ঠিকানা লুকানো" 
+                                          : `${donor.location.upazila}, ${donor.location.district}`}</span>
+                                  </div>
+                                  <div className="flex items-center gap-1.5 text-green-600 font-bold text-[10px] uppercase tracking-wider">
+                                     <Heart className="w-3 h-3 fill-current" />
+                                     <span>{donor.donationsCount || 0} বার</span>
+                                  </div>
+                               </div>
+                               <div className="mt-2">
+                                  {donor.lastDonated && (
+                                     <span className={cn(
+                                       "text-[8px] font-black uppercase tracking-widest px-2.5 py-1 rounded-full",
+                                       (() => {
+                                         const lastDonatedDate = new Date(donor.lastDonated);
+                                         const fourMonthsAgo = new Date();
+                                         fourMonthsAgo.setMonth(fourMonthsAgo.getMonth() - 4);
+                                         return lastDonatedDate < fourMonthsAgo 
+                                           ? "bg-accent/10 text-accent border border-accent/20"
+                                           : "bg-orange-100 dark:bg-orange-900/20 text-orange-700 dark:text-orange-500 border border-orange-200 dark:border-orange-900/30";
+                                       })()
+                                     )}>
+                                       {(() => {
+                                         const lastDonatedDate = new Date(donor.lastDonated);
+                                         const fourMonthsAgo = new Date();
+                                         fourMonthsAgo.setMonth(fourMonthsAgo.getMonth() - 4);
+                                         return lastDonatedDate < fourMonthsAgo 
+                                           ? "রক্তদানের যোগ্য"
+                                           : "অপেক্ষা করুন";
+                                       })()}
+                                     </span>
+                                  )}
+                               </div>
+                            </div>
+                            <div className="flex items-center gap-2">
+                               {!donor.privacySettings?.hidePhoneNumber && (
+                                  <a href={`tel:${donor.phoneNumber}`} className="w-12 h-12 bg-accent/10 dark:bg-accent/20 text-accent rounded-full flex items-center justify-center hover:scale-110 transition-transform shadow-xl shadow-accent/10">
+                                     <Phone className="w-5 h-5" />
+                                  </a>
+                                )}
+                            </div>
+                         </motion.div>
+                      ))}
+                   </AnimatePresence>
+                </div>
+             ) : hasSearched ? (
+                <div className="p-20 text-center bg-white dark:bg-gray-900 rounded-[40px] shadow-sm border border-gray-100 dark:border-gray-800">
+                   <div className="w-20 h-20 bg-gray-50 dark:bg-gray-800 rounded-full flex items-center justify-center mx-auto mb-6">
+                      <Search className="w-8 h-8 text-gray-300" />
+                   </div>
+                   <p className="text-gray-400 font-bold">দুঃখিত, কোনো ম্যাচিং ডোনার পাওয়া যায়নি</p>
+                </div>
+             ) : (
+                <div className="p-20 text-center bg-white dark:bg-gray-900 rounded-[40px] shadow-sm border border-gray-100 dark:border-gray-800">
+                   <div className="w-20 h-20 bg-gray-50 dark:bg-gray-800 rounded-full flex items-center justify-center mx-auto mb-6">
+                      <Users className="w-8 h-8 text-gray-200" />
+                   </div>
+                   <p className="text-gray-300 font-bold">ডোনার খুঁজতে উপরের ফিল্টার ব্যবহার করুন</p>
+                </div>
+             )}
           </div>
-        ) : (
-          <div className="bg-white p-20 rounded-[40px] text-center border border-gray-100 opacity-60 grayscale">
-            <Search className="w-16 h-16 text-gray-200 mx-auto mb-6" />
-            <p className="text-gray-400 text-lg font-bold">ডোনার খুঁজতে উপরের ফিল্টার ব্যবহার করুন</p>
-          </div>
-        )}
-      </div>
+       </div>
     </div>
   );
 }

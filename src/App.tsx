@@ -14,14 +14,22 @@ import { Onboarding } from './pages/Onboarding';
 import { BloodRequests } from './pages/BloodRequests';
 import { DonorSearch } from './pages/DonorSearch';
 import { Profile } from './pages/Profile';
-import { Chat } from './pages/Chat';
 import { Leaderboard } from './pages/Leaderboard';
-import { Directory } from './pages/Directory';
 import { AdminDashboard } from './pages/AdminDashboard';
+import { OrganizationProfile } from './pages/OrganizationProfile';
 import { PrivacyPolicy } from './pages/PrivacyPolicy';
 import { Heart } from 'lucide-react';
 
 import { seedSampleData } from './lib/seed';
+
+import { DonorMap } from './pages/DonorMap';
+import { Organizations } from './pages/Organizations';
+import { DonationTips } from './pages/DonationTips';
+import { HealthTracker } from './pages/HealthTracker';
+import { Certificates } from './pages/Certificates';
+import { Notifications } from './pages/Notifications';
+import { Campaigns } from './pages/Campaigns';
+import { EmergencyContact } from './pages/EmergencyContact';
 
 function AppContent() {
   const { user, profile, loading, isAuthReady } = useAuth();
@@ -78,7 +86,15 @@ function AppContent() {
           <Route path="/requests" element={<BloodRequests />} />
           <Route path="/search" element={<DonorSearch />} />
           <Route path="/leaderboard" element={<Leaderboard />} />
-          <Route path="/directory" element={<Directory />} />
+          <Route path="/map" element={<DonorMap />} />
+          <Route path="/campaigns" element={<Campaigns />} />
+          <Route path="/emergency" element={<EmergencyContact />} />
+          <Route path="/organizations" element={<Organizations />} />
+          <Route path="/organizations/:id" element={<OrganizationProfile />} />
+          <Route path="/tips" element={<DonationTips />} />
+          <Route path="/health-tracker" element={<HealthTracker />} />
+          <Route path="/certificates" element={<Certificates />} />
+          <Route path="/notifications" element={<Notifications />} />
           <Route path="/admin-panel" element={<AdminDashboard />} />
           <Route path="/profile" element={<Profile />} />
           <Route path="/privacy" element={<PrivacyPolicy />} />

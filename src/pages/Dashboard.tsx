@@ -2,15 +2,18 @@ import React, { useState, useEffect } from 'react';
 import { collection, query, where, orderBy, limit, onSnapshot, getDocs } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { useAuth } from '../contexts/AuthContext';
-import { BloodRequest, OperationType, UserProfile } from '../types';
+import { BloodRequest, OperationType, UserProfile, DonationRecord } from '../types';
 import { handleFirestoreError } from '../lib/error-handler';
-import { Heart, Activity, MapPin, Clock, Search, ExternalLink, Award, Star, TrendingUp, User, Bell, ShieldCheck } from 'lucide-react';
+import { Heart, Activity, MapPin, Clock, Search, ExternalLink, Award, Star, TrendingUp, User, Bell, ShieldCheck, Users, Map, BarChart2 } from 'lucide-react';
 import { formatDistanceToNow, differenceInDays, addDays, format } from 'date-fns';
 import { bn } from 'date-fns/locale';
 import { Link } from 'react-router-dom';
 import { cn } from '../lib/utils';
 import { motion } from 'motion/react';
+import { BarChart, Bar, XAxis, Tooltip, ResponsiveContainer, YAxis } from 'recharts';
 import { EligibilityChecker } from '../components/EligibilityChecker';
+import { BloodCompatibilityChart } from '../components/BloodCompatibilityChart';
+import { HealthTips } from '../components/HealthTips';
 
 const getBadge = (count: number = 0) => {
   if (count >= 10) return { icon: Award, label: 'অভিভাবক দূত', color: 'text-purple-600', bg: 'bg-purple-50' };
@@ -19,11 +22,14 @@ const getBadge = (count: number = 0) => {
   return { icon: Award, label: 'নতুন সদস্য', color: 'text-gray-400', bg: 'bg-gray-50' };
 };
 
+const ActionIcon = ({ icon: Icon }: { icon: any }) => <Icon className="w-8 h-8 text-gray-600 dark:text-gray-400" />;
+
 export function Dashboard() {
   const { profile } = useAuth();
   const [recentRequests, setRecentRequests] = useState<BloodRequest[]>([]);
   const [matchingRequests, setMatchingRequests] = useState<BloodRequest[]>([]);
   const [stats, setStats] = useState({ active: 0, critical: 0, totalDonors: 0 });
+  const [donationRecords, setDonationRecords] = useState<DonationRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [isCheckerOpen, setIsCheckerOpen] = useState(false);
 
@@ -63,6 +69,25 @@ export function Dashboard() {
     } catch (e) {
       console.warn("Donor stats fetch failed:", e);
     }
+    
+    if (profile) {
+      try {
+        const qDonations = query(
+          collection(db, 'users', profile.uid, 'donations'),
+          orderBy('date', 'asc')
+        );
+        getDocs(qDonations)
+          .then(snap => {
+            const history = snap.docs.map(doc => ({ id: doc.id, ...doc.data() } as DonationRecord));
+            setDonationRecords(history);
+          })
+          .catch(err => {
+            console.warn("Could not fetch donations:", err);
+          });
+      } catch (err) {
+        console.warn("Failed fetching donations config:", err);
+      }
+    }
 
     return () => unsubscribeRequests();
   }, [profile]);
@@ -75,236 +100,288 @@ export function Dashboard() {
   const isEligible = !lastDonatedDate || daysSinceDonation! >= 120;
   const nextEligibleDate = lastDonatedDate ? addDays(lastDonatedDate, 120) : null;
 
+  const chartData = donationRecords.map(record => ({
+    name: format(new Date(record.date), 'MMM yyyy', { locale: bn }),
+    points: record.pointsEarned || 0,
+    donations: 1
+  }));
+
   return (
-    <div className="space-y-10 animate-fade-in">
-      {/* Welcome Banner */}
-      <section className="bg-red-600 rounded-[40px] p-10 text-white relative overflow-hidden shadow-2xl shadow-red-200">
-        <div className="relative z-10 grid md:grid-cols-2 gap-10 items-center">
-          <div className="space-y-6">
-            <h1 className="text-4xl font-black mb-3">সালাম, {profile?.displayName}!</h1>
-            <p className="text-red-100 max-w-lg text-lg leading-relaxed">
-              আপনার রক্তের গ্রুপ <span className="font-black underline text-white">{profile?.bloodGroup || 'অজানা'}</span>। 
-              {profile?.isDonor ? ' আপনি একজন গর্বিত রক্তদাতা! আপনার অবদানে জীবন রক্ষা পাচ্ছে।' : ' আজই রক্তদাতা হিসেবে নিবন্ধন করুন।'}
-            </p>
-            <div className="flex flex-wrap gap-4 pt-4">
-              <Link to="/requests" className="px-8 py-4 bg-white text-red-600 rounded-3xl font-black text-lg hover:bg-gray-100 transition-all shadow-xl">
-                রক্তের অনুরোধ করুন
-              </Link>
-              <Link to="/search" className="px-8 py-4 bg-red-700/50 text-white border-2 border-red-500 rounded-3xl font-black text-lg hover:bg-red-700/80 transition-all">
-                রক্তদাতা খুঁজুন
-              </Link>
-            </div>
-          </div>
-
-          <div className="bg-white/10 backdrop-blur-md rounded-[40px] p-8 space-y-6 border border-white/20">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-4">
-                <div className={cn("p-4 rounded-3xl shadow-lg", badge.bg, badge.color)}>
-                  <badge.icon className="w-8 h-8" />
+    <div className="pb-32 animate-fade-in bg-gray-50 dark:bg-gray-950 min-h-screen">
+      <div className="max-w-4xl mx-auto px-6 pt-10 space-y-8">
+        {/* Welcome Card */}
+        <div className="bg-white dark:bg-gray-900 p-6 rounded-[40px] shadow-xl card-shadow border border-gray-100 dark:border-gray-800 flex items-center justify-between group">
+           <div className="space-y-2">
+              <p className="text-gray-400 font-bold text-base">স্বাগতম, <span className="text-gray-900 dark:text-white">{profile?.displayName || 'বন্ধু'}</span></p>
+              <p className="text-gray-900 dark:text-white font-black text-xl">{profile?.donationsCount || 0} বার রক্তদান</p>
+              
+              {!isEligible && (
+                <div className="flex items-center gap-2 text-brand font-black text-sm pt-2">
+                   <Clock className="w-4 h-4" /> 
+                   <span>পরবর্তী রক্তদানের জন্য {daysSinceDonation !== null ? Math.max(0, 120 - daysSinceDonation) : 120} দিন অপেক্ষা করুন</span>
                 </div>
-                <div>
-                  <p className="text-red-200 text-xs font-black uppercase tracking-widest">আপনার লেভেল</p>
-                  <p className="text-xl font-black">{badge.label}</p>
-                </div>
-              </div>
-              <div className="text-right">
-                <p className="text-red-200 text-xs font-black uppercase tracking-widest">পয়েন্ট</p>
-                <p className="text-3xl font-black">{profile?.points || 0}</p>
-              </div>
-            </div>
-            
-            <div className="grid grid-cols-2 gap-4">
-               <div className="bg-white/95 rounded-3xl p-4 text-gray-900 shadow-xl">
-                 <div className="flex items-center justify-between mb-1">
-                    <TrendingUp className="w-4 h-4 text-green-500" />
-                    <span className="text-[10px] font-black uppercase text-gray-400">রক্তদান</span>
-                 </div>
-                 <p className="text-2xl font-black">{profile?.donationsCount || 0} বার</p>
-               </div>
-               <div className="bg-white/95 rounded-3xl p-4 text-gray-900 shadow-xl">
-                  <div className="flex items-center justify-between mb-1">
-                    <Star className="w-4 h-4 text-yellow-500 fill-current" />
-                    <span className="text-[10px] font-black uppercase text-gray-400">রেটিং</span>
-                  </div>
-                  <p className="text-2xl font-black">{profile?.ratingAverage?.toFixed(1) || '0.0'}</p>
-               </div>
-            </div>
-          </div>
-        </div>
-        <Heart className="absolute -right-16 -bottom-16 w-80 h-80 text-red-500 opacity-20 transform -rotate-12 fill-current" />
-      </section>
-
-      {/* Personal Alerts & Eligibility */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        <div className="lg:col-span-2 space-y-6">
-          <div className="flex items-center justify-between">
-            <h2 className="text-2xl font-black text-gray-900 flex items-center gap-3">
-              <Bell className="w-7 h-7 text-red-600" /> আপনার জন্য বিশেষ অনুরোধ
-            </h2>
-            {matchingRequests.length > 0 && (
-               <span className="bg-red-600 text-white text-[10px] font-black px-3 py-1 rounded-full animate-pulse uppercase tracking-widest">
-                 {matchingRequests.length} টি নতুন
-               </span>
-            )}
-          </div>
-
-          {matchingRequests.length > 0 ? (
-            <div className="bg-red-50/50 p-6 rounded-[40px] border border-red-100 space-y-4">
-              {matchingRequests.slice(0, 2).map(req => (
-                <Link 
-                  key={req.id} 
-                  to="/requests" 
-                  className="block bg-white p-6 rounded-3xl shadow-sm border border-red-100 hover:shadow-xl transition-all group"
-                >
-                  <div className="flex items-center gap-5">
-                    <div className="w-14 h-14 bg-red-600 text-white rounded-2xl flex items-center justify-center font-black text-xl shadow-lg">
-                      {req.bloodGroup}
-                    </div>
-                    <div className="flex-1">
-                      <p className="font-black text-gray-900 group-hover:text-red-600 transition-colors">{req.hospitalName}</p>
-                      <p className="text-sm text-gray-500 font-bold">{req.location.upazila}, {req.location.district}</p>
-                    </div>
-                    <ExternalLink className="w-5 h-5 text-gray-300 group-hover:text-red-600" />
-                  </div>
-                </Link>
-              ))}
-            </div>
-          ) : (
-            <div className="bg-gray-50 p-8 rounded-[40px] text-center border border-dashed border-gray-200">
-              <p className="text-gray-400 font-bold">আপনার এলাকার জন্য নতুন কোনো অনুরোধ নেই</p>
-            </div>
-          )}
+              )}
+           </div>
+           <div className="w-20 h-20 bg-brand text-white rounded-full flex items-center justify-center font-black text-2xl shadow-xl shadow-red-200">
+              {profile?.bloodGroup || '?'}
+           </div>
         </div>
 
-        <div className="space-y-6">
-           <h2 className="text-2xl font-black text-gray-900 flex items-center gap-3">
-            <ShieldCheck className="w-7 h-7 text-green-600" /> রক্তদান যোগ্যতা
-          </h2>
-          <div className={cn(
-            "p-8 rounded-[40px] shadow-2xl relative overflow-hidden group",
-            isEligible ? "bg-green-600 text-white shadow-green-200" : "bg-orange-500 text-white shadow-orange-200"
-          )}>
-            <div className="relative z-10 space-y-4 text-center">
-              <div className="w-16 h-16 bg-white/20 rounded-2xl flex items-center justify-center mx-auto backdrop-blur-md">
-                <Activity className="w-8 h-8" />
+        {/* Info Grid */}
+        <div className="grid grid-cols-2 gap-4">
+           {/* Points */}
+           <div className="bg-white dark:bg-gray-900 p-6 rounded-[40px] shadow-xl card-shadow border border-gray-100 dark:border-gray-800 space-y-4">
+              <div className="w-12 h-12 bg-yellow-50 dark:bg-yellow-900/20 rounded-2xl flex items-center justify-center text-yellow-500">
+                 <Star className="w-6 h-6 fill-current" />
               </div>
               <div>
-                <p className="text-white/70 text-[10px] font-black uppercase tracking-widest mb-1">অবস্থা</p>
-                <p className="text-2xl font-black">{isEligible ? 'আপনি এখন রক্তদান করতে পারবেন' : 'পরবর্তী রক্তদানের সময়'}</p>
+                 <p className="text-2xl font-black text-gray-900 dark:text-white">{profile?.points || 0}</p>
+                 <p className="text-gray-400 font-bold text-sm">পয়েন্ট</p>
               </div>
-              {!isEligible && nextEligibleDate && (
-                <p className="text-orange-100 font-black text-lg bg-orange-600/30 py-2 px-4 rounded-xl inline-block">
-                  {format(nextEligibleDate, 'dd MMMM, yyyy', { locale: bn })}
-                </p>
-              )}
-              <button 
-                onClick={() => setIsCheckerOpen(true)}
-                className="w-full mt-4 py-4 bg-white text-gray-900 rounded-[24px] font-black text-sm uppercase tracking-widest hover:bg-gray-100 transition-all shadow-xl shadow-black/10"
-              >
-                যোগ্যতা যাচাই করুন
-              </button>
-            </div>
-            <Heart className="absolute -right-8 -bottom-8 w-40 h-40 text-white/10 fill-current group-hover:scale-125 transition-transform" />
-          </div>
-        </div>
-      </div>
-
-      {/* Stats Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-        <div className="bg-white p-8 rounded-[40px] border border-gray-100 shadow-xl flex items-center gap-6 group hover:scale-105 transition-all">
-          <div className="w-16 h-16 bg-red-50 rounded-2xl flex items-center justify-center text-red-600 shadow-inner group-hover:bg-red-600 group-hover:text-white transition-all">
-            <Activity className="w-8 h-8" />
-          </div>
-          <div>
-            <p className="text-sm text-gray-400 font-bold uppercase tracking-widest">সক্রিয় অনুরোধ</p>
-            <p className="text-4xl font-black text-gray-900">{stats.active}</p>
-          </div>
-        </div>
-        <div className="bg-white p-8 rounded-[40px] border border-gray-100 shadow-xl flex items-center gap-6 group hover:scale-105 transition-all">
-          <div className="w-16 h-16 bg-orange-50 rounded-2xl flex items-center justify-center text-orange-600 shadow-inner group-hover:bg-orange-500 group-hover:text-white transition-all">
-            <Activity className="w-8 h-8" />
-          </div>
-          <div>
-            <p className="text-sm text-gray-400 font-bold uppercase tracking-widest">জরুরি অবস্থা</p>
-            <p className="text-4xl font-black text-gray-900">{stats.critical}</p>
-          </div>
-        </div>
-        <div className="bg-white p-8 rounded-[40px] border border-gray-100 shadow-xl flex items-center gap-6 group hover:scale-105 transition-all">
-          <div className="w-16 h-16 bg-blue-50 rounded-2xl flex items-center justify-center text-blue-600 shadow-inner group-hover:bg-blue-600 group-hover:text-white transition-all">
-            <User className="w-8 h-8" />
-          </div>
-          <div>
-            <p className="text-sm text-gray-400 font-bold uppercase tracking-widest">মোট রক্তদাতা</p>
-            <p className="text-4xl font-black text-gray-900">{stats.totalDonors}</p>
-          </div>
-        </div>
-      </div>
-
-      {/* Recent Requests */}
-      <section className="space-y-6">
-        <div className="flex items-center justify-between">
-          <h2 className="text-2xl font-black text-gray-900">সাম্প্রতিক রক্তের অনুরোধ</h2>
-          <Link to="/requests" className="text-red-600 text-sm font-black flex items-center gap-2 hover:underline bg-red-50 px-6 py-3 rounded-2xl hover:bg-red-100 transition-all">
-            সবগুলো দেখুন <ExternalLink className="w-4 h-4" />
-          </Link>
+           </div>
+           {/* Badge */}
+           <div className="bg-white dark:bg-gray-900 p-6 rounded-[40px] shadow-xl card-shadow border border-gray-100 dark:border-gray-800 space-y-4">
+              <div className={cn("w-12 h-12 rounded-2xl flex items-center justify-center", badge.bg, badge.color)}>
+                 <badge.icon className="w-6 h-6" />
+              </div>
+              <div>
+                 <p className="text-xl font-black text-gray-900 dark:text-white leading-tight">{badge.label}</p>
+                 <p className="text-gray-400 font-bold text-sm">ব্যাজ</p>
+              </div>
+           </div>
+           {/* Total Donors */}
+           <div className="bg-white dark:bg-gray-900 p-6 rounded-[40px] shadow-xl card-shadow border border-gray-100 dark:border-gray-800 space-y-4">
+              <div className="w-12 h-12 bg-red-50 dark:bg-red-900/20 rounded-2xl flex items-center justify-center text-brand">
+                 <Users className="w-6 h-6" />
+              </div>
+              <div>
+                 <p className="text-2xl font-black text-gray-900 dark:text-white">{stats.totalDonors}</p>
+                 <p className="text-gray-400 font-bold text-sm">মোট দাতা</p>
+              </div>
+           </div>
+           {/* Requests Today */}
+           <div className="bg-white dark:bg-gray-900 p-6 rounded-[40px] shadow-xl card-shadow border border-gray-100 dark:border-gray-800 space-y-4">
+              <div className="w-12 h-12 bg-brand-muted dark:bg-brand/10 rounded-2xl flex items-center justify-center text-brand">
+                 <Activity className="w-6 h-6" />
+              </div>
+              <div>
+                 <p className="text-2xl font-black text-gray-900 dark:text-white">{stats.active}</p>
+                 <p className="text-gray-400 font-bold text-sm">আজকের আবেদন</p>
+              </div>
+           </div>
         </div>
 
-        {loading ? (
-          <div className="grid gap-6">
-            {[1, 2, 3].map(i => (
-              <div key={i} className="h-28 bg-white rounded-[40px] shimmer border border-gray-100" />
-            ))}
-          </div>
-        ) : recentRequests.length > 0 ? (
-          <div className="grid gap-6">
-            {recentRequests.map((req) => (
-              <motion.div
-                key={req.id}
-                layout
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                className="bg-white p-8 rounded-[40px] border border-gray-100 shadow-xl hover:shadow-2xl transition-all flex flex-col sm:flex-row items-center justify-between gap-6 group"
-              >
-                <div className="flex items-center gap-6 w-full sm:w-auto">
-                  <div className={cn(
-                    "w-20 h-20 rounded-3xl flex items-center justify-center font-black text-3xl shadow-lg shrink-0 transition-transform group-hover:scale-110",
-                    req.urgency === 'Critical' ? "bg-red-600 text-white shadow-red-200" : "bg-red-50 text-red-600 shadow-inner"
-                  )}>
-                    {req.bloodGroup}
-                  </div>
-                  <div>
-                    <h3 className="text-2xl font-black text-gray-900 group-hover:text-red-600 transition-colors">{req.hospitalName}</h3>
-                    <div className="flex flex-wrap items-center gap-6 text-base text-gray-500 mt-2 font-bold">
-                      <span className="flex items-center gap-2 bg-gray-50 px-3 py-1 rounded-xl"><MapPin className="w-4 h-4 text-red-400" /> {req.location.upazila}, {req.location.district}</span>
-                      <span className="flex items-center gap-2"><Clock className="w-4 h-4 text-gray-400" /> {formatDistanceToNow(new Date(req.createdAt), { locale: bn })} আগে</span>
+        {/* Donation Goal & Impact (Item 6) */}
+        <section className="bg-gradient-to-br from-indigo-600 to-blue-700 p-8 rounded-[40px] text-white shadow-2xl relative overflow-hidden">
+           <div className="relative z-10 space-y-6">
+              <div className="flex items-center justify-between">
+                 <div>
+                    <p className="text-indigo-100 font-black uppercase tracking-widest text-[10px] mb-1">জীবনের হিসাব</p>
+                    <h3 className="text-3xl font-black">আপনার প্রভাব</h3>
+                 </div>
+                 <div className="w-16 h-16 bg-white/20 backdrop-blur-md rounded-3xl flex items-center justify-center border border-white/30">
+                    <Heart className="w-8 h-8 fill-current" />
+                 </div>
+              </div>
+              
+              <div className="grid grid-cols-2 gap-6">
+                 <div className="space-y-1">
+                    <p className="text-4xl font-black">{(profile?.donationsCount || 0) * 3}</p>
+                    <p className="text-sm font-bold opacity-80">মানুষের জীবন বেঁচেছে</p>
+                 </div>
+                 <div className="space-y-1">
+                    <p className="text-4xl font-black">{profile?.donationsCount || 0}</p>
+                    <p className="text-sm font-bold opacity-80">রক্তদান করেছেন</p>
+                 </div>
+              </div>
+
+              <div className="pt-4 space-y-3">
+                 <div className="flex justify-between text-xs font-black uppercase tracking-wider">
+                    <span>পরবর্তী লক্ষ্য: {((profile?.donationsCount || 0) + 1)} বার রক্তদান</span>
+                    <span>{Math.min(100, ((profile?.points || 0) % 100))} %</span>
+                 </div>
+                 <div className="h-3 bg-white/10 rounded-full overflow-hidden border border-white/10">
+                    <motion.div 
+                      initial={{ width: 0 }}
+                      animate={{ width: `${Math.min(100, ((profile?.points || 0) % 100))}%` }}
+                      className="h-full bg-white shadow-lg shadow-white/20"
+                    />
+                 </div>
+                 <p className="text-[10px] font-bold opacity-70">আরও {(100 - ((profile?.points || 0) % 100))} পয়েন্ট হলে আপনি নতুন ব্যাজ পাবেন!</p>
+              </div>
+           </div>
+           <Award className="absolute -bottom-10 -right-10 w-48 h-48 text-white/5 rotate-12" />
+        </section>
+
+        {/* Matching Requests Section (Item 3) */}
+        {matchingRequests.length > 0 && (
+          <section className="space-y-4">
+             <div className="flex items-center justify-between px-2">
+                <h3 className="text-xl font-black text-gray-900 dark:text-white flex items-center gap-2">
+                  <div className="w-2 h-2 bg-brand rounded-full animate-ping" />
+                  আপনার গ্রুপের জরুরি আবেদন ({matchingRequests.length})
+                </h3>
+                <Link to="/requests" className="text-brand text-sm font-black">সব দেখুন</Link>
+             </div>
+             
+             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+               {matchingRequests.slice(0, 2).map((req) => (
+                 <Link 
+                   key={req.id} 
+                   to="/requests" 
+                   className="bg-brand text-white p-6 rounded-[32px] shadow-xl shadow-red-200 dark:shadow-none border border-transparent flex flex-col gap-4 relative overflow-hidden group hover:scale-[1.02] transition-transform"
+                 >
+                    <div className="relative z-10 flex justify-between items-start">
+                       <div className="space-y-1">
+                          <p className="text-[10px] font-black uppercase tracking-widest text-red-100">ম্যাচিং রিকোয়েস্ট</p>
+                          <h4 className="text-lg font-black truncate">{req.bloodGroup} রক্ত প্রয়োজন</h4>
+                       </div>
+                       <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center">
+                          <Heart className="w-6 h-6 fill-current" />
+                       </div>
                     </div>
-                  </div>
-                </div>
-                <div className="flex items-center gap-6 w-full sm:w-auto">
-                   <div className="text-right hidden md:block">
-                      <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">প্রয়োজন</p>
-                      <p className="text-gray-900 font-black">{req.requiredDate}</p>
-                   </div>
-                   <span className={cn(
-                     "px-6 py-3 rounded-2xl text-xs font-black uppercase tracking-widest shadow-sm",
-                     req.urgency === 'Critical' ? "bg-red-100 text-red-700" : "bg-gray-100 text-gray-600"
-                   )}>
-                     {req.urgency === 'Critical' ? 'সুপার ইমারজেন্সি' : 'জরুরি'}
-                   </span>
-                   <Link to={`/requests`} className="p-4 bg-gray-50 rounded-3xl hover:bg-red-600 hover:text-white transition-all shadow-inner">
-                      <ExternalLink className="w-7 h-7" />
-                   </Link>
-                </div>
-              </motion.div>
-            ))}
-          </div>
-        ) : (
-          <div className="bg-white p-20 rounded-[40px] text-center border-2 border-dashed border-gray-200">
-            <Heart className="w-20 h-20 text-gray-200 mx-auto mb-6" />
-            <p className="text-gray-400 text-xl font-bold">বর্তমানে কোনো রক্তের অনুরোধ নেই</p>
-          </div>
+                    <div className="relative z-10 space-y-2">
+                       <p className="text-sm font-bold opacity-90"><MapPin className="w-4 h-4 inline mr-1" /> {req.hospitalName}</p>
+                       <p className="text-xs font-bold opacity-80">{req.location.upazila}, {req.location.district}</p>
+                    </div>
+                    <Heart className="absolute -right-10 -bottom-10 w-32 h-32 text-white/5 fill-current group-hover:scale-110 transition-transform" />
+                 </Link>
+               ))}
+             </div>
+          </section>
         )}
-      </section>
+
+        {/* Donation Trend Graphic */}
+        {(profile?.donationsCount ?? 0) > 0 && (
+          <section className="space-y-4">
+             <div className="flex items-center justify-between px-2">
+                <h3 className="text-xl font-black text-gray-900 dark:text-white flex items-center gap-2">
+                  <BarChart2 className="w-5 h-5 text-brand" />
+                  রক্তদানের ধারা
+                </h3>
+             </div>
+             <div className="bg-white dark:bg-gray-900 p-6 rounded-[40px] shadow-xl card-shadow border border-gray-100 dark:border-gray-800">
+               {chartData.length > 0 ? (
+                 <div className="h-64 w-full pt-4">
+                   <ResponsiveContainer width="100%" height="100%">
+                     <BarChart data={chartData}>
+                       <XAxis dataKey="name" fontSize={12} tickLine={false} axisLine={false} />
+                       <YAxis fontSize={12} tickLine={false} axisLine={false} />
+                       <Tooltip 
+                         contentStyle={{ borderRadius: '16px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
+                         cursor={{ fill: 'rgba(220, 38, 38, 0.05)' }}
+                       />
+                       <Bar dataKey="points" name="অর্জিত পয়েন্ট" fill="#DC2626" radius={[6, 6, 0, 0]} />
+                     </BarChart>
+                   </ResponsiveContainer>
+                 </div>
+               ) : (
+                 <div className="h-64 flex flex-col items-center justify-center text-gray-400 space-y-3">
+                    <BarChart2 className="w-12 h-12 opacity-20" />
+                    <p className="font-bold text-sm">গ্রাফ লোড হচ্ছে...</p>
+                    <p className="text-xs">অপেক্ষা করুন</p>
+                 </div>
+               )}
+             </div>
+          </section>
+        )}
+
+        {/* Quick Actions */}
+        <section className="space-y-4">
+           <h3 className="text-xl font-black text-gray-900 dark:text-white px-2">দ্রুত কাজ</h3>
+           <div className="grid grid-cols-3 gap-4">
+              {[
+                { to: '/search', icon: Search, label: 'রক্ত খুঁজুন' },
+                { to: '/leaderboard', icon: TrendingUp, label: 'লিডারবোর্ড' },
+                { to: '/campaigns', icon: Users, label: 'ক্যাম্পেইন' },
+                { to: '/emergency', icon: Activity, label: 'জরুরি সেবা' },
+                { to: '/certificates', icon: Award, label: 'সার্টিফিকেট' },
+                { to: '/map', icon: Map, label: 'ডোনার ম্যাপ' },
+              ].map((action, idx) => (
+                <Link 
+                  key={idx}
+                  to={action.to}
+                  className="bg-white dark:bg-gray-900 p-6 rounded-[32px] shadow-lg border border-gray-50 dark:border-gray-800 flex flex-col items-center gap-3 hover:scale-105 transition-transform"
+                >
+                   <ActionIcon icon={action.icon} />
+                   <p className="text-xs font-black text-gray-500 dark:text-gray-400 uppercase tracking-tight text-center">{action.label}</p>
+                </Link>
+              ))}
+           </div>
+        </section>
+
+        {/* Active Emergency Requests */}
+
+        {/* Active Emergency Requests */}
+        <section className="space-y-4">
+           <div className="flex items-center justify-between px-2">
+              <h3 className="text-xl font-black text-gray-900 dark:text-white">সক্রিয় জরুরি আবেদন</h3>
+           </div>
+           
+           <div className="space-y-4">
+              {recentRequests.length > 0 ? (
+                recentRequests.map(req => (
+                  <Link 
+                    key={req.id} 
+                    to="/requests" 
+                    className="flex items-center gap-4 bg-white dark:bg-gray-900 p-4 rounded-[32px] shadow-lg border border-gray-50 dark:border-gray-800 group"
+                  >
+                     <div className="w-16 h-16 bg-red-50 dark:bg-red-900/10 text-brand rounded-full flex items-center justify-center font-black text-xl shrink-0 group-hover:scale-110 transition-transform">
+                        {req.bloodGroup}
+                     </div>
+                     <div className="flex-1 min-w-0">
+                        <h4 className="font-black text-gray-900 dark:text-white truncate">{req.patientName || 'জরুরি রক্ত'} - {req.bloodGroup}</h4>
+                        <p className="text-xs text-gray-500 font-bold truncate">{req.hospitalName}</p>
+                        <p className="text-[10px] text-gray-400 font-bold"><MapPin className="w-2.5 h-2.5 inline mr-1" /> {req.location.district}, {req.location.upazila}</p>
+                     </div>
+                     <div className="w-12 h-12 bg-green-50 dark:bg-green-900/10 text-green-600 rounded-2xl flex items-center justify-center shrink-0">
+                        <ExternalLink className="w-6 h-6" />
+                     </div>
+                  </Link>
+                ))
+              ) : (
+                <div className="bg-white dark:bg-gray-900 p-8 rounded-[40px] text-center border-2 border-dashed border-gray-100 dark:border-gray-800">
+                   <p className="text-gray-400 font-bold">বর্তমানে কোনো জরুরি আবেদন নেই</p>
+                </div>
+              )}
+           </div>
+        </section>
+
+        {/* Recent Donations */}
+        <section className="space-y-4">
+           <div className="flex items-center justify-between px-2">
+              <h3 className="text-xl font-black text-gray-900 dark:text-white">সাম্প্রতিক রক্তদান</h3>
+              <button className="text-brand text-sm font-black">সব দেখুন</button>
+           </div>
+           
+           <div className="bg-white dark:bg-gray-900 rounded-[40px] shadow-lg border border-gray-50 dark:border-gray-800 overflow-hidden divide-y dark:divide-gray-800">
+              {/* Mocking recent donation list since we don't have a direct collections for "global donations" yet, usually we show user's own or top donors */}
+              {[1, 2].map((_, idx) => (
+                <div key={idx} className="p-6 flex items-center gap-4">
+                   <div className="w-12 h-12 bg-red-50 dark:bg-red-900/10 rounded-full flex items-center justify-center text-brand">
+                      <Heart className="w-6 h-6 fill-current" />
+                   </div>
+                   <div className="flex-1">
+                      <p className="font-black text-gray-900 dark:text-white">{idx === 0 ? 'মোহাম্মদ রহিম' : 'ফাতেমা বেগম'}</p>
+                      <p className="text-xs text-gray-500 font-bold">{idx === 0 ? 'স্কয়ার হাসপাতাল' : 'আনোয়ার খান মডার্ন হাসপাতাল'}</p>
+                   </div>
+                   <p className="text-[10px] text-gray-400 font-black uppercase">{idx === 0 ? '২৫ মার্চ ২০২৬' : '২৫ নভে ২০২৫'}</p>
+                </div>
+              ))}
+           </div>
+        </section>
+
+        {/* Health Tips (Item 6) */}
+        <HealthTips />
+      </div>
+
+      {/* Floating Action Button */}
+      <Link 
+        to="/requests" 
+        className="fixed bottom-8 right-8 bg-brand text-white px-8 py-4 rounded-[28px] font-black shadow-2xl shadow-brand/40 flex items-center gap-3 hover:scale-105 transition-transform z-40 active:scale-95"
+      >
+         <span className="text-xl">✱</span> জরুরি রক্ত
+      </Link>
 
       <EligibilityChecker isOpen={isCheckerOpen} onClose={() => setIsCheckerOpen(false)} />
     </div>

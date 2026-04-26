@@ -114,7 +114,7 @@ export function DonorCard({ donor }: DonorCardProps) {
               </div>
               <div className="w-20 bg-gray-50 rounded-3xl p-3 flex items-center justify-center border border-gray-100">
                 <QRCodeSVG 
-                  value={`${window.location.origin}/profile/${donor.uid}`} 
+                  value={`${window.location.origin}/`} 
                   size={48}
                   level="H"
                 />
@@ -129,7 +129,9 @@ export function DonorCard({ donor }: DonorCardProps) {
                 </div>
                 <div>
                   <p className="text-[9px] font-black text-gray-400 uppercase tracking-widest leading-none mb-1">Call for help</p>
-                  <p className="text-sm font-black text-gray-800 tracking-tight">{donor.phoneNumber}</p>
+                  <p className="text-sm font-black text-gray-800 tracking-tight">
+                    {donor.privacySettings?.hidePhoneNumber ? "গোপন রাখা হয়েছে" : donor.phoneNumber}
+                  </p>
                 </div>
               </div>
               <div className="flex items-center gap-4">
@@ -138,7 +140,11 @@ export function DonorCard({ donor }: DonorCardProps) {
                 </div>
                 <div>
                   <p className="text-[9px] font-black text-gray-400 uppercase tracking-widest leading-none mb-1">Last seen at</p>
-                  <p className="text-sm font-black text-gray-800 truncate max-w-[180px]">{donor.location.upazila}, {donor.location.district}</p>
+                  <p className="text-sm font-black text-gray-800 truncate max-w-[180px]">
+                    {donor.privacySettings?.hideLocation 
+                      ? "ঠিকানা লুকানো" 
+                      : `${donor.location.upazila}, ${donor.location.district}`}
+                  </p>
                 </div>
               </div>
             </div>

@@ -13,6 +13,17 @@
         "location": { "type": "string" },
         "isDonor": { "type": "boolean" },
         "phoneNumber": { "type": "string" },
+        "points": { "type": "integer" },
+        "donationsCount": { "type": "integer" },
+        "referralCode": { "type": "string" },
+        "badges": { "type": "array", "items": { "type": "string" } },
+        "privacySettings": {
+          "type": "object",
+          "properties": {
+            "hidePhoneNumber": { "type": "boolean" },
+            "hideLocation": { "type": "boolean" }
+          }
+        },
         "lastDonated": { "type": "string", "format": "date-time" },
         "createdAt": { "type": "string", "format": "date-time" }
       },
@@ -37,6 +48,131 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["requesterId", "bloodGroup", "location", "urgency", "requiredDate", "status"]
+    },
+    "Organization": {
+      "title": "Organization",
+      "description": "Blood donation organizations and clubs",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "phoneNumber": { "type": "string" },
+        "location": { "type": "object" },
+        "address": { "type": "string" },
+        "coverageArea": { "type": "string" },
+        "description": { "type": "string" },
+        "type": { "type": "string" },
+        "memberCount": { "type": "integer" },
+        "isVerified": { "type": "boolean" },
+        "adminUid": { "type": "string" }
+      },
+      "required": ["name", "type", "adminUid"]
+    },
+    "SuccessStory": {
+      "title": "Success Story",
+      "description": "Stories shared by donors and recipients",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "authorId": { "type": "string" },
+        "authorName": { "type": "string" },
+        "content": { "type": "string" },
+        "imageUrl": { "type": "string" },
+        "likes": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "DonationEvent": {
+      "title": "Donation Event",
+      "description": "Blood donation camps and events",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "orgId": { "type": "string" },
+        "orgName": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "date": { "type": "string" },
+        "location": { "type": "string" },
+        "contactNumber": { "type": "string" },
+        "imageUrl": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "HealthRecord": {
+      "title": "HealthRecord",
+      "description": "Donor health tracking data",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "date": { "type": "string", "format": "date" },
+        "bloodPressure": { "type": "string" },
+        "hemoglobin": { "type": "number" },
+        "weight": { "type": "number" },
+        "pulse": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "date", "bloodPressure", "hemoglobin", "weight", "createdAt"]
+    },
+    "DonationCertificate": {
+      "title": "DonationCertificate",
+      "description": "Digital completion certificate for blood donation",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "donorName": { "type": "string" },
+        "bloodGroup": { "type": "string" },
+        "donationDate": { "type": "string", "format": "date" },
+        "donationCount": { "type": "number" },
+        "issuedAt": { "type": "string", "format": "date-time" },
+        "certificateNo": { "type": "string" }
+      },
+      "required": ["userId", "donorName", "bloodGroup", "donationDate", "donationCount", "issuedAt", "certificateNo"]
+    },
+    "EmergencyResource": {
+      "title": "Emergency Resource",
+      "description": "Blood banks and ambulance services",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "type": { "type": "string", "enum": ["Blood Bank", "Ambulance"] },
+        "location": { "type": "string" },
+        "contactNumber": { "type": "string" },
+        "available24h": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "type", "location", "contactNumber"]
+    },
+    "HealthTip": {
+      "title": "Health Tip",
+      "description": "Education and tips about blood donation",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "content": { "type": "string" },
+        "imageUrl": { "type": "string" },
+        "category": { "type": "string", "enum": ["Pre-Donation", "Post-Donation", "General Health"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["title", "content", "category"]
+    },
+    "Notification": {
+      "title": "Notification",
+      "description": "In-app alerts for users",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "title": { "type": "string" },
+        "message": { "type": "string" },
+        "type": { "type": "string", "enum": ["Eligibility", "New Request", "Badge Earned", "System"] },
+        "isRead": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "title", "message", "type", "isRead", "createdAt"]
     }
   },
   "firestore": {
@@ -47,6 +183,38 @@
     "/requests/{requestId}": {
       "schema": "BloodRequest",
       "description": "Public blood donation requests"
+    },
+    "/organizations/{orgId}": {
+      "schema": "Organization",
+      "description": "Registered organizations"
+    },
+    "/stories/{storyId}": {
+      "schema": "SuccessStory",
+      "description": "Community shared success stories"
+    },
+    "/events/{eventId}": {
+      "schema": "DonationEvent",
+      "description": "Upcoming donation camps and events"
+    },
+    "/health_records/{recordId}": {
+      "schema": "HealthRecord",
+      "description": "Donor health tracking records"
+    },
+    "/certificates/{certId}": {
+      "schema": "DonationCertificate",
+      "description": "Digital certificates issued for donations"
+    },
+    "/resources/{resourceId}": {
+      "schema": "EmergencyResource",
+      "description": "Blood banks and ambulance services database"
+    },
+    "/health_tips/{tipId}": {
+      "schema": "HealthTip",
+      "description": "Health tips and educational content"
+    },
+    "/notifications/{notificationId}": {
+      "schema": "Notification",
+      "description": "In-app user notifications"
     }
   }
 }

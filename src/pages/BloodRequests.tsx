@@ -11,6 +11,8 @@ import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../lib/utils';
 import { DIVISIONS, Division, District } from '../constants/locations';
 import { sendNotification } from '../lib/notifications';
+import { donationService } from '../services/donationService';
+import { notifyDonorsOfUrgentRequest } from '../services/smsService';
 
 const BLOOD_GROUPS: BloodGroup[] = ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'];
 const URGENCY_LEVELS: Urgency[] = ['Low', 'Normal', 'High', 'Critical'];
@@ -23,11 +25,24 @@ const URGENCY_MAP: Record<Urgency, string> = {
 };
 
 const FinancialWarning = () => (
-  <div className="bg-orange-50 border border-orange-100 p-6 rounded-[32px] flex gap-4 items-start mb-8">
+  <div className="bg-orange-50 border border-orange-100 p-6 rounded-[32px] flex gap-4 items-start mb-6">
     <AlertCircle className="w-6 h-6 text-orange-500 shrink-0 mt-1" />
     <div>
       <h4 className="text-orange-900 font-black text-lg">আর্থিক লেনদেন থেকে সাবধান!</h4>
       <p className="text-orange-700 text-sm font-bold">রক্তদান একটি মহৎ কাজ। দয়া করে এর বিনিময়ে কোনো অর্থ লেনদেন করবেন না। কেউ টাকা চাইলে সাথে সাথে কর্তৃপক্ষের সাহায্য নিন।</p>
+    </div>
+  </div>
+);
+
+const DonorRespectNote = () => (
+  <div className="bg-blue-50 border border-blue-100 p-6 rounded-[32px] flex gap-4 items-start mb-8 shadow-sm">
+    <Heart className="w-6 h-6 text-blue-500 shrink-0 mt-1 fill-current" />
+    <div>
+      <h4 className="text-blue-900 font-black text-lg">রক্তদাতার সম্মান রক্ষা করুন</h4>
+      <p className="text-blue-700 text-sm font-bold leading-relaxed">
+        রক্তদাতারা সম্পূর্ণ নিঃস্বার্থভাবে মূল্যবান রক্ত দান করে জীবন বাঁচান। তারা কোনো প্রতিদান চান না, কেবল একটু সম্মান ও আন্তরিকতা আশা করেন। 
+        দয়া করে ডোনারের সাথে বিনয়ী আচরণ করুন এবং রক্তদানের পর তাকে অন্তত ৩০ মিনিট বিশ্রাম ও প্রয়োজনীয় নাস্তা নিশ্চিত করুন।
+      </p>
     </div>
   </div>
 );
@@ -45,6 +60,8 @@ export function BloodRequests() {
   const [selectedDonorId, setSelectedDonorId] = useState<string>('');
   const [processingCompletion, setProcessingCompletion] = useState(false);
 
+  const [shareSuccess, setShareSuccess] = useState<string | null>(null);
+
   const handleShare = (req: BloodRequest, platform: 'wa' | 'fb' | 'clipboard') => {
     const text = `রক্তের অনুরোধ: ${req.bloodGroup} রক্ত প্রয়োজন। \nহাসপাতাল: ${req.hospitalName}\nঅবস্থান: ${req.location.upazila}, ${req.location.district}\nরক্ত প্রয়োজন: ${req.requiredDate}\nযোগাযোগ: ${req.contactNumber}\n\nরক্তসেতু অ্যাপের মাধ্যমে রক্ত দান করুন।`;
     const url = window.location.origin;
@@ -55,7 +72,8 @@ export function BloodRequests() {
       window.open(`https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(url)}&quote=${encodeURIComponent(text)}`, '_blank');
     } else {
       navigator.clipboard.writeText(text + '\n' + url);
-      alert('সফলভাবে কপি হয়েছে!');
+      setShareSuccess(req.id);
+      setTimeout(() => setShareSuccess(null), 2000);
     }
   };
 
@@ -159,13 +177,22 @@ export function BloodRequests() {
           userId: donorDoc.id,
           title: 'নতুন রক্তের অনুরোধ!',
           message: `${district} জেলায় ${bloodGroup} রক্তের জরুরি প্রয়োজন।`,
-          type: 'warning',
+          type: 'New Request',
           isRead: false,
           requestId: requestDoc.id,
           link: '/requests'
         }));
       
       await Promise.all(notificationPromises);
+
+      // Send SMS Alerts to donors who have phone numbers
+      const donorPhones = donorsSnap.docs
+        .map(doc => (doc.data() as UserProfile).phoneNumber)
+        .filter((phone): phone is string => !!phone && phone.length >= 11);
+      
+      if (donorPhones.length > 0) {
+        await notifyDonorsOfUrgentRequest(donorPhones, bloodGroup, `${upazila}, ${district}`);
+      }
 
       setIsModalOpen(false);
       resetForm();
@@ -181,6 +208,10 @@ export function BloodRequests() {
 
     setProcessingCompletion(true);
     try {
+      // 0. Get request details first
+      const reqSnap = await getDoc(doc(db, 'requests', completingId));
+      const reqData = reqSnap.data() as BloodRequest;
+
       // 1. Update request status
       await updateDoc(doc(db, 'requests', completingId), {
         status: 'Fulfilled',
@@ -189,7 +220,16 @@ export function BloodRequests() {
         completedAt: new Date().toISOString()
       });
 
-      // 2. Update donor profile (points, rating, donationsCount)
+      // 2. Add to donation history
+      await donationService.addDonation(selectedDonorId, {
+        date: new Date().toISOString(),
+        location: `${reqData.location.upazila}, ${reqData.location.district}`,
+        hospitalName: reqData.hospitalName,
+        bloodGroup: reqData.bloodGroup,
+        notes: `সহায়তা করেছেন: ${reqData.requesterName}`
+      });
+
+      // 3. Update donor profile (points, rating, donationsCount etc is handled inside donationService partially but we need rating)
       const donorRef = doc(db, 'users', selectedDonorId);
       const donorSnap = await getDoc(donorRef);
       if (donorSnap.exists()) {
@@ -198,19 +238,16 @@ export function BloodRequests() {
         const newRatingAverage = ((donorData.ratingAverage || 0) * (donorData.ratingCount || 0) + rating) / newRatingCount;
         
         await updateDoc(donorRef, {
-          donationsCount: increment(1),
-          points: increment(100), // Default points per donation
           ratingCount: newRatingCount,
           ratingAverage: newRatingAverage,
-          lastDonated: new Date().toISOString()
         });
 
-        // 3. Send notification to donor
+        // 4. Send notification to donor
         await sendNotification({
           userId: selectedDonorId,
           title: 'রক্তদান সম্পন্ন হয়েছে!',
           message: `আপনার রক্তদানের জন্য ধন্যবাদ। আপনি ১০০ পয়েন্ট অর্জন করেছেন। আপনার গড় রেটিং এখন ${newRatingAverage.toFixed(1)}।`,
-          type: 'success',
+          type: 'System',
           isRead: false,
           requestId: completingId,
           link: '/profile'
@@ -247,15 +284,17 @@ export function BloodRequests() {
   const handleDelete = async (requestId: string) => {
     try {
       await deleteDoc(doc(db, 'requests', requestId));
-      setDeletingId(null);
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, `requests/${requestId}`);
+    } finally {
+      setDeletingId(null);
     }
   };
 
   return (
     <div className="space-y-8 pb-20">
       <FinancialWarning />
+      <DonorRespectNote />
       
       <div className="flex flex-col sm:flex-row items-center justify-between gap-6">
         <div>

@@ -1,24 +1,38 @@
 import React from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
-import { Home, Search, Heart, User, LogOut, Menu, X, Award, MapPin, Shield, Moon, Sun, MessageSquare } from 'lucide-react';
+import { Home, Search, Heart, User, LogOut, Menu, X, Award, MapPin, Shield, Moon, Sun, MessageSquare, Map, Users, Info, Activity } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { NotificationCenter } from './NotificationCenter';
 import { cn } from '../lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
+import { AuthModal } from './AuthModal';
+import { LogIn } from 'lucide-react';
 
 export function Layout({ children }: { children: React.ReactNode }) {
-  const { profile, logout, user } = useAuth();
+  const { profile, logout, user, clearError } = useAuth();
   const { theme, toggleTheme } = useTheme();
   const [isMenuOpen, setIsMenuOpen] = React.useState(false);
+  const [isAuthModalOpen, setIsAuthModalOpen] = React.useState(false);
   const navigate = useNavigate();
+
+  const openAuth = () => {
+    setIsAuthModalOpen(true);
+    clearError?.();
+  };
 
   const navItems = [
     { to: '/', icon: Home, label: 'ড্যাশবোর্ড' },
     { to: '/requests', icon: Heart, label: 'অনুরোধ' },
     { to: '/search', icon: Search, label: 'ডোনার খুঁজুন' },
+    { to: '/tips', icon: Info, label: 'স্বাস্থ্য টিপস' },
+    { to: '/map', icon: Map, label: 'ম্যাপ' },
+    { to: '/campaigns', icon: Users, label: 'ক্যাম্পেইন' },
+    { to: '/emergency', icon: Activity, label: 'জরুরি সেবা' },
+    { to: '/health-tracker', icon: Activity, label: 'হেলথ ট্র্যাকার' },
+    { to: '/certificates', icon: Award, label: 'সার্টিফিকেট' },
     { to: '/leaderboard', icon: Award, label: 'সেরা ডোনার' },
-    { to: '/directory', icon: MapPin, label: 'ডিরেক্টরি' },
+    { to: 'https://wa.me/8801897971573', icon: MessageSquare, label: 'সাপোর্ট' },
   ];
 
   const isAdmin = profile?.role === 'admin' || user?.email === 'aiyubuddin08@gmail.com';
@@ -48,21 +62,44 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
           {/* Desktop Nav */}
           <nav className="hidden lg:flex items-center gap-8">
-            {navItems.map((item) => (
-              <NavLink
-                key={item.to}
-                to={item.to}
-                className={({ isActive }) =>
-                  cn(
-                    "flex items-center gap-2 text-base font-bold transition-all hover:text-red-600 dark:hover:text-red-500",
-                    isActive ? "text-red-600 dark:text-red-500" : "text-gray-500 dark:text-gray-400"
-                  )
-                }
-              >
-                <item.icon className="w-5 h-5" />
-                {item.label}
-              </NavLink>
-            ))}
+            {navItems.map((item) => {
+              const isExternal = item.to.startsWith('http');
+              const content = (
+                <>
+                  <item.icon className="w-5 h-5" />
+                  {item.label}
+                </>
+              );
+
+              if (isExternal) {
+                return (
+                  <a
+                    key={item.to}
+                    href={item.to}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-2 text-base font-bold text-gray-500 dark:text-gray-400 transition-all hover:text-red-600 dark:hover:text-red-500"
+                  >
+                    {content}
+                  </a>
+                );
+              }
+
+              return (
+                <NavLink
+                  key={item.to}
+                  to={item.to}
+                  className={({ isActive }) =>
+                    cn(
+                      "flex items-center gap-2 text-base font-bold transition-all hover:text-red-600 dark:hover:text-red-500",
+                      isActive ? "text-red-600 dark:text-red-500" : "text-gray-500 dark:text-gray-400"
+                    )
+                  }
+                >
+                  {content}
+                </NavLink>
+              );
+            })}
           </nav>
 
           <div className="flex items-center gap-2 sm:gap-4">
@@ -78,13 +115,21 @@ export function Layout({ children }: { children: React.ReactNode }) {
             {/* Notification Center */}
             <NotificationCenter />
 
-            {user && (
+            {user ? (
               <button
                 onClick={handleLogout}
                 className="hidden md:flex items-center gap-2 text-base font-bold text-gray-400 hover:text-red-600 dark:hover:text-red-500 transition-colors"
               >
                 <LogOut className="w-5 h-5" />
                 লগআউট
+              </button>
+            ) : (
+              <button
+                onClick={openAuth}
+                className="hidden md:flex items-center gap-2 px-6 py-2.5 bg-red-600 text-white rounded-2xl text-base font-bold hover:bg-red-700 transition-all shadow-lg shadow-red-200 dark:shadow-none"
+              >
+                <LogIn className="w-5 h-5" />
+                লগইন
               </button>
             )}
 
@@ -109,29 +154,60 @@ export function Layout({ children }: { children: React.ReactNode }) {
             className="lg:hidden bg-white dark:bg-gray-900 border-b dark:border-gray-800 overflow-hidden"
           >
             <div className="px-4 py-4 space-y-2">
-              {navItems.map((item) => (
-                <NavLink
-                  key={item.to}
-                  to={item.to}
-                  onClick={() => setIsMenuOpen(false)}
-                  className={({ isActive }) =>
-                    cn(
-                      "flex items-center gap-3 px-4 py-3 rounded-2xl text-base font-bold transition-colors",
-                      isActive ? "bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-500" : "text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800"
-                    )
-                  }
-                >
-                  <item.icon className="w-5 h-5" />
-                  {item.label}
-                </NavLink>
-              ))}
-              {user && (
+              {navItems.map((item) => {
+                const isExternal = item.to.startsWith('http');
+                const content = (
+                  <>
+                    <item.icon className="w-5 h-5" />
+                    {item.label}
+                  </>
+                );
+
+                if (isExternal) {
+                  return (
+                    <a
+                      key={item.to}
+                      href={item.to}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-center gap-3 px-4 py-3 rounded-2xl text-base font-bold text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
+                    >
+                      {content}
+                    </a>
+                  );
+                }
+
+                return (
+                  <NavLink
+                    key={item.to}
+                    to={item.to}
+                    onClick={() => setIsMenuOpen(false)}
+                    className={({ isActive }) =>
+                      cn(
+                        "flex items-center gap-3 px-4 py-3 rounded-2xl text-base font-bold transition-colors",
+                        isActive ? "bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-500" : "text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800"
+                      )
+                    }
+                  >
+                    {content}
+                  </NavLink>
+                );
+              })}
+              {user ? (
                 <button
                   onClick={handleLogout}
                   className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl text-base font-bold text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors text-left"
                 >
                   <LogOut className="w-5 h-5" />
-                  Logout
+                  লগআউট
+                </button>
+              ) : (
+                <button
+                  onClick={openAuth}
+                  className="w-full flex items-center gap-3 px-4 py-4 rounded-[24px] bg-red-600 text-white text-base font-black hover:bg-red-700 transition-colors"
+                >
+                  <LogIn className="w-5 h-5" />
+                  লগইন করুন
                 </button>
               )}
             </div>
@@ -143,6 +219,11 @@ export function Layout({ children }: { children: React.ReactNode }) {
       <main className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-8 animate-fade-in relative z-0">
         {children}
       </main>
+
+      <AuthModal 
+        isOpen={isAuthModalOpen} 
+        onClose={() => setIsAuthModalOpen(false)} 
+      />
 
       {/* Footer */}
       <footer className="bg-white dark:bg-gray-900 border-t dark:border-gray-800 py-12 transition-colors duration-300">
