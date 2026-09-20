@@ -1,0 +1,6 @@
+{
+  "name": "RoktoSetu",
+  "description": "রক্তসেতু (RoktoSetu) - Modern blood donation and emergency assistance platform connecting donors, emergency requests, organizations, and administrators.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
