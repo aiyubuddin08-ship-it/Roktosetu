@@ -1,19 +1,66 @@
 package com.example.data.firebase
 
+import android.content.Context
+import android.util.Log
+import com.example.BuildConfig
+import com.google.firebase.FirebaseApp
+import com.google.firebase.appcheck.AppCheckProviderFactory
+import com.google.firebase.appcheck.FirebaseAppCheck
+
 /**
  * Standardized result wrapper for operations throughout the application.
  */
 sealed class Resource<out T> {
     data class Success<out T>(val data: T) : Resource<T>()
-    data class Error(val message: String, val code: String? = null) : Resource<Nothing>()
-    object Loading : Resource<Nothing>()
+    data class Error(
+        val message: String,
+        val throwable: Throwable? = null,
+        val code: String? = null
+    ) : Resource<Nothing>()
+    data object Loading : Resource<Nothing>()
 }
 
 /**
  * Security and privacy sanitization helper.
- * Masks internal Firebase/network stacktraces into clean, secure user-facing messages.
+ * Masks internal Firebase/network stacktraces into clean, secure user-facing messages
+ * and initializes Firebase App Check + notification channels at startup.
  */
 object FirebaseSecurityHelper {
+
+    @Volatile
+    private var appCheckInitialized = false
+
+    /**
+     * Initializes Firebase App Check (Debug provider in debug builds via reflection,
+     * Play Integrity / ReCaptcha Enterprise in release builds when configured) and creates
+     * the emergency notification channel.
+     */
+    fun initializeAppCheckAndChannels(context: Context) {
+        val appContext = context.applicationContext
+        RoktoSetuMessagingService.ensureNotificationChannel(appContext)
+        if (appCheckInitialized) return
+
+        synchronized(this) {
+            if (appCheckInitialized) return
+            try {
+                FirebaseApp.initializeApp(appContext)
+                val firebaseAppCheck = FirebaseAppCheck.getInstance()
+                if (BuildConfig.DEBUG) {
+                    val debugFactoryClass = Class.forName(
+                        "com.google.firebase.appcheck.debug.DebugAppCheckProviderFactory"
+                    )
+                    val getInstanceMethod = debugFactoryClass.getMethod("getInstance")
+                    val factory = getInstanceMethod.invoke(null) as? AppCheckProviderFactory
+                    if (factory != null) {
+                        firebaseAppCheck.installAppCheckProviderFactory(factory)
+                    }
+                }
+                appCheckInitialized = true
+            } catch (e: Exception) {
+                Log.w("FirebaseSecurityHelper", "App Check initialization skipped: ${e.message}")
+            }
+        }
+    }
 
     fun mapExceptionToMessage(e: Throwable?): String {
         if (e == null) return "Unknown error occurred. Please try again."
@@ -54,7 +101,7 @@ object FirebaseSecurityHelper {
                 "অনুগ্রহ করে সঠিক ইমেইল ঠিকানা প্রদান করুন।"
 
             rawMessage.contains("weak-password", ignoreCase = true) ->
-                "পাসওয়ার্ড কমপক্ষে ৬ অক্ষরের হতে হবে।"
+                "পাসওয়ার্ড কমপক্ষে ৮ অক্ষরের হতে হবে (বড় হাতের, ছোট হাতের অক্ষর ও সংখ্যা সহ)।"
 
             else -> "অপারেশন সম্পন্ন করা যায়নি। অনুগ্রহ করে পুনরায় চেষ্টা করুন।"
         }

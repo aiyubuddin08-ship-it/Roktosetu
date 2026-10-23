@@ -11,6 +11,8 @@ data class Organization(
     val contactEmail: String = "",
     val contactPhone: String = "",
     val headquartersCity: String = "",
+    val division: String = "Dhaka",
+    val district: String = headquartersCity.ifBlank { "Dhaka" },
     val coverImageUrl: String = "",
     val logoUrl: String = "",
     val adminUids: List<String> = emptyList(),

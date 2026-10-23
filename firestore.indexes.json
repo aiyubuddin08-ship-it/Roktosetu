@@ -1,11 +1,49 @@
 {
   "indexes": [
     {
+      "collectionGroup": "public_donors",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "isDonor", "order": "ASCENDING" },
+        { "fieldPath": "bloodGroup", "order": "ASCENDING" },
+        { "fieldPath": "division", "order": "ASCENDING" },
+        { "fieldPath": "district", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "public_donors",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "isDonor", "order": "ASCENDING" },
+        { "fieldPath": "availability", "order": "ASCENDING" },
+        { "fieldPath": "bloodGroup", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "blood_requests",
       "queryScope": "COLLECTION",
       "fields": [
         { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "bloodGroup", "order": "ASCENDING" },
         { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "blood_requests",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "division", "order": "ASCENDING" },
+        { "fieldPath": "district", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "conversations",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "participants", "arrayConfig": "CONTAINS" },
+        { "fieldPath": "lastMessageTimestamp", "order": "DESCENDING" }
       ]
     },
     {
@@ -17,11 +55,21 @@
       ]
     },
     {
-      "collectionGroup": "conversations",
+      "collectionGroup": "blood_requests",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "participants", "arrayConfig": "CONTAINS" },
-        { "fieldPath": "lastMessageTimestamp", "order": "DESCENDING" }
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "expiresAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "users",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "isDonor", "order": "ASCENDING" },
+        { "fieldPath": "isEmergencyDonor", "order": "ASCENDING" },
+        { "fieldPath": "donorAvailability", "order": "ASCENDING" },
+        { "fieldPath": "bloodGroup", "order": "ASCENDING" }
       ]
     }
   ],

@@ -10,6 +10,7 @@ data class Conversation(
     val participantNames: Map<String, String> = emptyMap(),
     val participantBloodGroups: Map<String, String> = emptyMap(),
     val relatedRequestId: String? = null,
+    val requestId: String? = relatedRequestId,
     val lastMessage: String = "",
     val lastMessageTimestamp: Long = System.currentTimeMillis(),
     val lastMessageSenderUid: String = ""

@@ -7,6 +7,7 @@ import com.example.data.firebase.Resource
 import com.example.data.repository.RoktoSetuRepository
 import com.example.model.ChatMessage
 import com.example.model.Conversation
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -27,14 +28,33 @@ class ChatViewModel(
     private val _uiState = MutableStateFlow(ChatUiState())
     val uiState: StateFlow<ChatUiState> = _uiState.asStateFlow()
 
+    private var conversationsJob: Job? = null
+    private var messagesJob: Job? = null
+
     init {
-        loadConversations()
+        viewModelScope.launch {
+            repository.currentUserProfile.collect { profile ->
+                if (profile != null) {
+                    loadConversations()
+                } else {
+                    conversationsJob?.cancel()
+                    messagesJob?.cancel()
+                    _uiState.value = ChatUiState()
+                }
+            }
+        }
     }
 
     fun loadConversations() {
         val uid = repository.currentUserId ?: return
-        viewModelScope.launch {
-            repository.getConversations(uid).collect { list ->
+        conversationsJob?.cancel()
+        conversationsJob = viewModelScope.launch {
+            repository.getConversations(
+                userUid = uid,
+                onError = { msg ->
+                    _uiState.value = _uiState.value.copy(errorMessage = msg)
+                }
+            ).collect { list ->
                 _uiState.value = _uiState.value.copy(conversations = list)
             }
         }
@@ -42,18 +62,35 @@ class ChatViewModel(
 
     fun openConversation(convId: String) {
         _uiState.value = _uiState.value.copy(activeConversationId = convId)
-        viewModelScope.launch {
-            repository.getMessages(convId).collect { msgs ->
+        messagesJob?.cancel()
+        messagesJob = viewModelScope.launch {
+            repository.getMessages(
+                conversationId = convId,
+                onError = { msg ->
+                    _uiState.value = _uiState.value.copy(errorMessage = msg)
+                }
+            ).collect { msgs ->
                 _uiState.value = _uiState.value.copy(messages = msgs)
             }
         }
     }
 
     fun sendMessage(convId: String, text: String) {
-        val uid = repository.currentUserId ?: return
+        val trimmed = text.trim()
+        if (trimmed.isBlank()) return
+        val uid = repository.currentUserId
+        if (uid.isNullOrBlank()) {
+            _uiState.value = _uiState.value.copy(errorMessage = "বার্তা পাঠাতে অনুগ্রহ করে সাইন-ইন করুন।")
+            return
+        }
         val name = repository.currentUserProfile.value?.name ?: "User"
         viewModelScope.launch {
-            repository.sendMessage(convId, uid, name, text)
+            when (val res = repository.sendMessage(convId, uid, name, trimmed)) {
+                is Resource.Error -> {
+                    _uiState.value = _uiState.value.copy(errorMessage = res.message)
+                }
+                else -> {}
+            }
         }
     }
 
@@ -64,7 +101,15 @@ class ChatViewModel(
         requestId: String? = null,
         onReady: (String) -> Unit
     ) {
-        val myProfile = repository.currentUserProfile.value ?: return
+        val myProfile = repository.currentUserProfile.value
+        if (myProfile == null) {
+            _uiState.value = _uiState.value.copy(errorMessage = "Please sign in to start a conversation.")
+            return
+        }
+        if (myProfile.uid == donorUid) {
+            _uiState.value = _uiState.value.copy(errorMessage = "You cannot start a conversation with yourself.")
+            return
+        }
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isLoading = true, errorMessage = null)
             when (val res = repository.getOrCreateConversation(
@@ -86,6 +131,10 @@ class ChatViewModel(
                 is Resource.Loading -> {}
             }
         }
+    }
+
+    fun clearError() {
+        _uiState.value = _uiState.value.copy(errorMessage = null)
     }
 }
 

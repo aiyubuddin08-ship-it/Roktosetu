@@ -294,7 +294,14 @@ fun AppNavigation(
                         }
                     },
                     onLoginSuccess = {
-                        navController.popBackStack()
+                        navController.navigate(Screen.Home.route) {
+                            popUpTo(0) { inclusive = true }
+                        }
+                    },
+                    onAdminLoginSuccess = {
+                        navController.navigate(Screen.AdminDashboard.route) {
+                            popUpTo(0) { inclusive = true }
+                        }
                     }
                 )
             }
@@ -313,7 +320,9 @@ fun AppNavigation(
                         }
                     },
                     onRegisterSuccess = {
-                        navController.popBackStack()
+                        navController.navigate(Screen.Home.route) {
+                            popUpTo(0) { inclusive = true }
+                        }
                     }
                 )
             }
@@ -322,38 +331,6 @@ fun AppNavigation(
                 ForgotPasswordScreen(
                     authViewModel = authViewModel,
                     onNavigateBack = { navController.popBackStack() }
-                )
-            }
-
-            composable(Screen.AuthEmailVerification.route) {
-                EmailVerificationScreen(
-                    authViewModel = authViewModel,
-                    onVerifiedSuccess = { navController.popBackStack() },
-                    onSignOut = {
-                        authViewModel.signOut()
-                        navController.navigate(Screen.Home.route) {
-                            popUpTo(0) { inclusive = true }
-                        }
-                    }
-                )
-            }
-
-            composable(Screen.AuthProfileCompletion.route) {
-                ProfileCompletionScreen(
-                    authViewModel = authViewModel,
-                    onCompletionSuccess = { navController.popBackStack() }
-                )
-            }
-
-            composable(Screen.AuthAccountDisabled.route) {
-                AccountDisabledScreen(
-                    authViewModel = authViewModel,
-                    onSignOut = {
-                        authViewModel.signOut()
-                        navController.navigate(Screen.Home.route) {
-                            popUpTo(0) { inclusive = true }
-                        }
-                    }
                 )
             }
 
@@ -427,7 +404,8 @@ fun AppNavigation(
             composable(Screen.AdminDashboard.route) {
                 AdminDashboardScreen(
                     adminViewModel = adminViewModel,
-                    onNavigateBack = { navController.popBackStack() }
+                    onNavigateBack = { navController.popBackStack() },
+                    authViewModel = authViewModel
                 )
             }
 

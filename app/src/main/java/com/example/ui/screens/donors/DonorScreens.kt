@@ -10,26 +10,35 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.HealthAndSafety
+import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -43,10 +52,14 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.example.domain.BloodCompatibilityHelper
+import com.example.domain.LocationHelper
 import com.example.model.BloodGroup
 import com.example.ui.components.AuthRequiredDialog
 import com.example.ui.components.PublicDonorItemCard
 import com.example.ui.components.RoktoTopAppBar
+import com.example.ui.theme.BloodSuccessGreen
 import com.example.ui.viewmodel.AuthViewModel
 import com.example.ui.viewmodel.BloodViewModel
 import com.example.ui.viewmodel.ChatViewModel
@@ -66,13 +79,37 @@ fun DonorDirectoryScreen(
     val context = LocalContext.current
     val currentUserProfile by authViewModel.currentUserProfile.collectAsState()
     val bloodState by bloodViewModel.uiState.collectAsState()
-    var searchQuery by remember { mutableStateOf("") }
+
+    var nameOrAreaQuery by remember { mutableStateOf("") }
     var showAuthPromptDialog by remember { mutableStateOf(false) }
 
+    var divisionExpanded by remember { mutableStateOf(false) }
+    var districtExpanded by remember { mutableStateOf(false) }
+    var upazilaExpanded by remember { mutableStateOf(false) }
+
+    val availableDistricts = remember(bloodState.selectedDivision) {
+        if (bloodState.selectedDivision.isBlank()) {
+            LocationHelper.ALL_DISTRICTS
+        } else {
+            LocationHelper.getDistrictsForDivision(bloodState.selectedDivision)
+        }
+    }
+
+    val availableUpazilas = remember(bloodState.selectedDistrict) {
+        if (bloodState.selectedDistrict.isBlank()) {
+            emptyList()
+        } else {
+            LocationHelper.getUpazilasForDistrict(bloodState.selectedDistrict)
+        }
+    }
+
     val filteredDonors = bloodState.donors.filter { donor ->
-        searchQuery.isBlank() ||
-                donor.name.contains(searchQuery, ignoreCase = true) ||
-                donor.generalLocation.contains(searchQuery, ignoreCase = true)
+        nameOrAreaQuery.isBlank() ||
+                donor.name.contains(nameOrAreaQuery, ignoreCase = true) ||
+                donor.generalLocation.contains(nameOrAreaQuery, ignoreCase = true) ||
+                donor.area.contains(nameOrAreaQuery, ignoreCase = true) ||
+                donor.upazila.contains(nameOrAreaQuery, ignoreCase = true) ||
+                donor.district.contains(nameOrAreaQuery, ignoreCase = true)
     }
 
     if (showAuthPromptDialog) {
@@ -105,15 +142,21 @@ fun DonorDirectoryScreen(
         ) {
             item {
                 Spacer(modifier = Modifier.height(4.dp))
-                // Search Input
+                // Search Input by Name / Area / Upazila
                 OutlinedTextField(
-                    value = searchQuery,
-                    onValueChange = { searchQuery = it },
-                    placeholder = { Text("Search by name or area...") },
+                    value = nameOrAreaQuery,
+                    onValueChange = {
+                        nameOrAreaQuery = it
+                        bloodViewModel.setAreaSearchQuery(it)
+                    },
+                    placeholder = { Text("Search by donor name, area, or upazila...") },
                     leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
                     trailingIcon = {
-                        if (searchQuery.isNotBlank()) {
-                            IconButton(onClick = { searchQuery = "" }) {
+                        if (nameOrAreaQuery.isNotBlank()) {
+                            IconButton(onClick = {
+                                nameOrAreaQuery = ""
+                                bloodViewModel.setAreaSearchQuery("")
+                            }) {
                                 Icon(Icons.Default.Clear, contentDescription = "Clear")
                             }
                         }
@@ -128,6 +171,11 @@ fun DonorDirectoryScreen(
 
             // Blood Group Filter Chips
             item {
+                Text(
+                    text = "Recipient / Required Blood Group (প্রয়োজনীয় রক্তের গ্রুপ):",
+                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
+                )
+                Spacer(modifier = Modifier.height(4.dp))
                 LazyRow(
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
@@ -139,7 +187,8 @@ fun DonorDirectoryScreen(
                             colors = FilterChipDefaults.filterChipColors(
                                 selectedContainerColor = MaterialTheme.colorScheme.primary,
                                 selectedLabelColor = Color.White
-                            )
+                            ),
+                            modifier = Modifier.testTag("chip_donor_bg_all")
                         )
                     }
                     items(BloodGroup.entries) { bg ->
@@ -149,11 +198,246 @@ fun DonorDirectoryScreen(
                                 val next = if (bloodState.selectedBloodGroupFilter == bg) null else bg
                                 bloodViewModel.setBloodGroupFilter(next)
                             },
-                            label = { Text(bg.display, fontWeight = FontWeight.Bold) },
+                            label = { Text("${bg.display} (${bg.bengaliDisplay})", fontWeight = FontWeight.Bold) },
                             colors = FilterChipDefaults.filterChipColors(
                                 selectedContainerColor = MaterialTheme.colorScheme.primary,
                                 selectedLabelColor = Color.White
-                            )
+                            ),
+                            modifier = Modifier.testTag("chip_donor_bg_${bg.name}")
+                        )
+                    }
+                }
+            }
+
+            // Exact vs Medically Compatible & Availability Filter Row
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    FilterChip(
+                        selected = !bloodState.includeCompatibleDonors,
+                        onClick = { bloodViewModel.setIncludeCompatibleDonors(false) },
+                        label = { Text("Exact Group Only", fontSize = 12.sp, fontWeight = FontWeight.SemiBold) },
+                        modifier = Modifier.testTag("chip_exact_match_only")
+                    )
+                    FilterChip(
+                        selected = bloodState.includeCompatibleDonors,
+                        onClick = { bloodViewModel.setIncludeCompatibleDonors(true) },
+                        label = { Text("Exact + Compatible RBC", fontSize = 12.sp, fontWeight = FontWeight.SemiBold) },
+                        modifier = Modifier.testTag("chip_compatible_match")
+                    )
+                    FilterChip(
+                        selected = bloodState.onlyAvailableDonors,
+                        onClick = { bloodViewModel.setOnlyAvailableDonors(!bloodState.onlyAvailableDonors) },
+                        leadingIcon = if (bloodState.onlyAvailableDonors) {
+                            { Icon(Icons.Default.CheckCircle, contentDescription = null, modifier = Modifier.size(16.dp)) }
+                        } else null,
+                        label = { Text("Available Now", fontSize = 12.sp, fontWeight = FontWeight.SemiBold) },
+                        modifier = Modifier.testTag("chip_only_available")
+                    )
+                }
+            }
+
+            // Division, District, Upazila Location Filters
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.LocationOn,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Filter by Location (বিভাগ, জেলা ও উপজেলা)",
+                                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
+                                )
+                            }
+                            if (bloodState.selectedDivision.isNotBlank() ||
+                                bloodState.selectedDistrict.isNotBlank() ||
+                                bloodState.selectedUpazila.isNotBlank()
+                            ) {
+                                OutlinedButton(
+                                    onClick = { bloodViewModel.setDivisionFilter("All") },
+                                    shape = RoundedCornerShape(8.dp)
+                                ) {
+                                    Text("Reset Location", fontSize = 11.sp)
+                                }
+                            }
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            // Division Dropdown
+                            ExposedDropdownMenuBox(
+                                expanded = divisionExpanded,
+                                onExpandedChange = { divisionExpanded = !divisionExpanded },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                OutlinedTextField(
+                                    value = bloodState.selectedDivision.ifBlank { "All Divisions" },
+                                    onValueChange = {},
+                                    readOnly = true,
+                                    label = { Text("Division (বিভাগ)") },
+                                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = divisionExpanded) },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .menuAnchor()
+                                        .testTag("dropdown_filter_division"),
+                                    singleLine = true
+                                )
+                                ExposedDropdownMenu(
+                                    expanded = divisionExpanded,
+                                    onDismissRequest = { divisionExpanded = false }
+                                ) {
+                                    DropdownMenuItem(
+                                        text = { Text("All Divisions") },
+                                        onClick = {
+                                            bloodViewModel.setDivisionFilter("All")
+                                            divisionExpanded = false
+                                        }
+                                    )
+                                    LocationHelper.DIVISIONS.forEach { div ->
+                                        DropdownMenuItem(
+                                            text = { Text(div) },
+                                            onClick = {
+                                                bloodViewModel.setDivisionFilter(div)
+                                                divisionExpanded = false
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+
+                            // District Dropdown
+                            ExposedDropdownMenuBox(
+                                expanded = districtExpanded,
+                                onExpandedChange = { districtExpanded = !districtExpanded },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                OutlinedTextField(
+                                    value = bloodState.selectedDistrict.ifBlank { "All Districts" },
+                                    onValueChange = {},
+                                    readOnly = true,
+                                    label = { Text("District (জেলা)") },
+                                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = districtExpanded) },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .menuAnchor()
+                                        .testTag("dropdown_filter_district"),
+                                    singleLine = true
+                                )
+                                ExposedDropdownMenu(
+                                    expanded = districtExpanded,
+                                    onDismissRequest = { districtExpanded = false }
+                                ) {
+                                    DropdownMenuItem(
+                                        text = { Text("All Districts") },
+                                        onClick = {
+                                            bloodViewModel.setDistrictFilter("All")
+                                            districtExpanded = false
+                                        }
+                                    )
+                                    availableDistricts.forEach { dist ->
+                                        DropdownMenuItem(
+                                            text = { Text(dist) },
+                                            onClick = {
+                                                bloodViewModel.setDistrictFilter(dist)
+                                                districtExpanded = false
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        if (availableUpazilas.isNotEmpty()) {
+                            ExposedDropdownMenuBox(
+                                expanded = upazilaExpanded,
+                                onExpandedChange = { upazilaExpanded = !upazilaExpanded },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                OutlinedTextField(
+                                    value = bloodState.selectedUpazila.ifBlank { "All Upazilas / Thanas in ${bloodState.selectedDistrict}" },
+                                    onValueChange = {},
+                                    readOnly = true,
+                                    label = { Text("Upazila / Thana (উপজেলা/থানা)") },
+                                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = upazilaExpanded) },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .menuAnchor()
+                                        .testTag("dropdown_filter_upazila"),
+                                    singleLine = true
+                                )
+                                ExposedDropdownMenu(
+                                    expanded = upazilaExpanded,
+                                    onDismissRequest = { upazilaExpanded = false }
+                                ) {
+                                    DropdownMenuItem(
+                                        text = { Text("All Upazilas / Thanas") },
+                                        onClick = {
+                                            bloodViewModel.setUpazilaFilter("All")
+                                            upazilaExpanded = false
+                                        }
+                                    )
+                                    availableUpazilas.forEach { upz ->
+                                        DropdownMenuItem(
+                                            text = { Text(upz) },
+                                            onClick = {
+                                                bloodViewModel.setUpazilaFilter(upz)
+                                                upazilaExpanded = false
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Clinical Crossmatching Disclaimer Banner
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+                    )
+                ) {
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.HealthAndSafety,
+                            contentDescription = null,
+                            tint = BloodSuccessGreen,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = BloodCompatibilityHelper.CLINICAL_DISCLAIMER_EN,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
@@ -166,9 +450,15 @@ fun DonorDirectoryScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "Verified Active Donors (${filteredDonors.size})",
+                        text = "Matching Donors (${filteredDonors.size})",
                         style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                     )
+                    IconButton(
+                        onClick = { bloodViewModel.retryLoad() },
+                        modifier = Modifier.testTag("btn_refresh_donors")
+                    ) {
+                        Icon(Icons.Default.Refresh, contentDescription = "Refresh Donors")
+                    }
                 }
             }
 
@@ -187,15 +477,28 @@ fun DonorDirectoryScreen(
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
                             Text(
-                                text = "No donors found for this filter",
-                                style = MaterialTheme.typography.titleMedium
+                                text = "No matching donors found in the database",
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                             )
                             Text(
-                                text = "Try selecting another blood group or clearing your search term.",
+                                text = "Try clearing location or blood group filters, or enable compatible RBC donor groups.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(top = 4.dp)
+                                modifier = Modifier.padding(top = 4.dp, bottom = 12.dp)
                             )
+                            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                OutlinedButton(
+                                    onClick = {
+                                        nameOrAreaQuery = ""
+                                        bloodViewModel.clearFilters()
+                                    }
+                                ) {
+                                    Text("Clear Filters")
+                                }
+                                Button(onClick = { bloodViewModel.retryLoad() }) {
+                                    Text("Retry")
+                                }
+                            }
                         }
                     }
                 }
@@ -203,6 +506,7 @@ fun DonorDirectoryScreen(
                 items(filteredDonors) { donor ->
                     PublicDonorItemCard(
                         donor = donor,
+                        recipientBloodGroup = bloodState.selectedBloodGroupFilter,
                         onCallClick = {
                             if (donor.contactPhone.isNotBlank()) {
                                 val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:${donor.contactPhone}"))

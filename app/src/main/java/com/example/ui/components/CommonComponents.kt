@@ -24,16 +24,12 @@ import androidx.compose.material.icons.filled.Emergency
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LocationOn
-import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Login
 import androidx.compose.material.icons.filled.MedicalServices
-import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Verified
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Badge
-import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -52,12 +48,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.domain.BloodCompatibilityHelper
+import com.example.domain.CompatibilityMatchType
+import com.example.domain.LocationHelper
 import com.example.model.BloodGroup
 import com.example.model.BloodRequest
 import com.example.model.DonorAvailability
@@ -68,7 +66,6 @@ import com.example.model.VerificationStatus
 import com.example.ui.theme.BloodGold
 import com.example.ui.theme.BloodPendingAmber
 import com.example.ui.theme.BloodPendingContainer
-import com.example.ui.theme.BloodRed
 import com.example.ui.theme.BloodSuccessContainer
 import com.example.ui.theme.BloodSuccessGreen
 import com.example.ui.theme.EmergencyRed
@@ -110,9 +107,11 @@ fun BloodGroupBadge(
 fun StatusChip(status: RequestStatus) {
     val (bgColor, textColor, icon) = when (status) {
         RequestStatus.PENDING -> Triple(BloodPendingContainer, BloodPendingAmber, Icons.Default.Info)
+        RequestStatus.DONOR_RESPONDED -> Triple(Color(0xFFE3F2FD), Color(0xFF1565C0), Icons.Default.CheckCircle)
         RequestStatus.ACCEPTED -> Triple(Color(0xFFE3F2FD), Color(0xFF1565C0), Icons.Default.CheckCircle)
         RequestStatus.FULFILLED -> Triple(BloodSuccessContainer, BloodSuccessGreen, Icons.Default.Verified)
         RequestStatus.CANCELLED -> Triple(Color(0xFFEEEEEE), Color(0xFF757575), Icons.Default.Warning)
+        RequestStatus.EXPIRED -> Triple(Color(0xFFFFEBEE), Color(0xFFC62828), Icons.Default.Warning)
     }
 
     Surface(
@@ -346,8 +345,13 @@ fun AuthRequiredDialog(
 fun PublicDonorItemCard(
     donor: PublicDonorView,
     onCallClick: () -> Unit,
-    onChatClick: () -> Unit
+    onChatClick: () -> Unit,
+    recipientBloodGroup: BloodGroup? = null
 ) {
+    val matchType = recipientBloodGroup?.let {
+        BloodCompatibilityHelper.classifyDonorMatch(donor.bloodGroup, it)
+    }
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -363,7 +367,11 @@ fun PublicDonorItemCard(
                 .padding(14.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            BloodGroupBadge(bloodGroup = donor.bloodGroup, sizeInDp = 52)
+            BloodGroupBadge(
+                bloodGroup = donor.bloodGroup,
+                sizeInDp = 52,
+                isHighlighted = matchType == CompatibilityMatchType.EXACT_MATCH
+            )
 
             Spacer(modifier = Modifier.width(14.dp))
 
@@ -379,14 +387,31 @@ fun PublicDonorItemCard(
                         Spacer(modifier = Modifier.width(4.dp))
                         Icon(
                             imageVector = Icons.Default.Verified,
-                            contentDescription = "Verified Donor",
+                            contentDescription = "Identity & Blood Group Verified by Admin",
                             tint = BloodSuccessGreen,
                             modifier = Modifier.size(16.dp)
                         )
                     }
                 }
 
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp)) {
+                if (matchType != null && matchType != CompatibilityMatchType.INCOMPATIBLE) {
+                    Spacer(modifier = Modifier.height(3.dp))
+                    val isExact = matchType == CompatibilityMatchType.EXACT_MATCH
+                    Surface(
+                        color = if (isExact) BloodSuccessContainer else Color(0xFFFFF8E1),
+                        shape = RoundedCornerShape(6.dp)
+                    ) {
+                        Text(
+                            text = if (isExact) "Exact Blood Group Match • সরাসরি মিল" else "Medically Compatible RBC • বিকল্প সামঞ্জস্যপূর্ণ",
+                            color = if (isExact) BloodSuccessGreen else Color(0xFFE65100),
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
+                }
+
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
                     Icon(
                         imageVector = Icons.Default.LocationOn,
                         contentDescription = null,
@@ -394,19 +419,22 @@ fun PublicDonorItemCard(
                         modifier = Modifier.size(14.dp)
                     )
                     Spacer(modifier = Modifier.width(3.dp))
-                    Text(
-                        text = donor.generalLocation.ifEmpty { "General Area" },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    if (donor.distanceKm != null && donor.distanceKm > 0) {
-                        Text(
-                            text = " • ${donor.distanceKm} km",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.primary,
-                            fontWeight = FontWeight.Bold
+                    val displayLoc = donor.generalLocation.ifBlank {
+                        LocationHelper.formatGeneralLocation(
+                            division = donor.division,
+                            district = donor.district,
+                            upazila = donor.upazila,
+                            area = donor.area,
+                            city = donor.city
                         )
                     }
+                    Text(
+                        text = displayLoc,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
 
                 Row(
@@ -414,12 +442,16 @@ fun PublicDonorItemCard(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     val availText = when (donor.availability) {
-                        DonorAvailability.AVAILABLE -> "Available to Donate"
-                        DonorAvailability.RESTING -> "Resting Period"
-                        DonorAvailability.EMERGENCY_ONLY -> "Emergency Calls Only"
-                        DonorAvailability.UNAVAILABLE -> "Currently Unavailable"
+                        DonorAvailability.AVAILABLE -> "Available (উপলব্ধ)"
+                        DonorAvailability.RESTING -> "Resting Period (বিশ্রামকালীন)"
+                        DonorAvailability.EMERGENCY_ONLY -> "Emergency Only (জরুরী)"
+                        DonorAvailability.UNAVAILABLE -> "Unavailable (অনুপলব্ধ)"
                     }
-                    val availColor = if (donor.availability == DonorAvailability.AVAILABLE) BloodSuccessGreen else Color.Gray
+                    val availColor = when (donor.availability) {
+                        DonorAvailability.AVAILABLE -> BloodSuccessGreen
+                        DonorAvailability.EMERGENCY_ONLY -> BloodPendingAmber
+                        DonorAvailability.RESTING, DonorAvailability.UNAVAILABLE -> Color.Gray
+                    }
 
                     Box(
                         modifier = Modifier
@@ -429,7 +461,7 @@ fun PublicDonorItemCard(
                     )
                     Spacer(modifier = Modifier.width(5.dp))
                     Text(
-                        text = "$availText (${donor.donationCount} donations)",
+                        text = "$availText • ${donor.donationCount} donations",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -444,7 +476,7 @@ fun PublicDonorItemCard(
                     IconButton(
                         onClick = onCallClick,
                         modifier = Modifier
-                            .size(38.dp)
+                            .size(40.dp)
                             .clip(CircleShape)
                             .background(BloodSuccessContainer)
                             .testTag("btn_call_donor_${donor.uid}")
@@ -461,7 +493,7 @@ fun PublicDonorItemCard(
                 IconButton(
                     onClick = onChatClick,
                     modifier = Modifier
-                        .size(38.dp)
+                        .size(40.dp)
                         .clip(CircleShape)
                         .background(MaterialTheme.colorScheme.primaryContainer)
                         .testTag("btn_chat_donor_${donor.uid}")
@@ -485,6 +517,9 @@ fun BloodRequestItemCard(
     onCardClick: () -> Unit,
     canAccept: Boolean = true
 ) {
+    val isPending = request.status == RequestStatus.PENDING
+    val isDonorAssigned = request.status == RequestStatus.DONOR_RESPONDED || request.status == RequestStatus.ACCEPTED
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -532,6 +567,14 @@ fun BloodRequestItemCard(
 
             Spacer(modifier = Modifier.height(10.dp))
 
+            val locString = LocationHelper.formatGeneralLocation(
+                division = request.division,
+                district = request.district,
+                upazila = request.upazila,
+                area = request.area,
+                city = request.city
+            )
+
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
                     imageVector = Icons.Default.LocationOn,
@@ -541,7 +584,7 @@ fun BloodRequestItemCard(
                 )
                 Spacer(modifier = Modifier.width(4.dp))
                 Text(
-                    text = "${request.hospitalName}, ${request.city}",
+                    text = "${request.hospitalName} • $locString",
                     style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
@@ -568,7 +611,7 @@ fun BloodRequestItemCard(
             ) {
                 UrgencyBadge(urgency = request.urgency)
 
-                if (request.status == RequestStatus.PENDING && canAccept) {
+                if (isPending && canAccept) {
                     Button(
                         onClick = onAcceptClick,
                         colors = ButtonDefaults.buttonColors(
@@ -581,9 +624,9 @@ fun BloodRequestItemCard(
                         Spacer(modifier = Modifier.width(6.dp))
                         Text("I Can Donate", fontWeight = FontWeight.Bold)
                     }
-                } else if (request.status == RequestStatus.ACCEPTED) {
+                } else if (isDonorAssigned) {
                     Text(
-                        text = "Donor Assigned: ${request.acceptedDonorName ?: "Hero Donor"}",
+                        text = "Donor Responded: ${request.acceptedDonorName ?: "Verified Donor"}",
                         style = MaterialTheme.typography.labelMedium,
                         color = BloodSuccessGreen,
                         fontWeight = FontWeight.Bold

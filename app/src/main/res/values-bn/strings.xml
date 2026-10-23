@@ -1,0 +1,29 @@
+<resources>
+    <string name="app_name">RoktoSetu</string>
+    <string name="app_name_bengali">রক্তসেতু</string>
+    <string name="app_tagline">জীবন রক্ষাকারী রক্তদান নেটওয়ার্ক</string>
+
+    <!-- Authentication & Session Strings (Bengali) -->
+    <string name="auth_verify_email_title">আপনার ইমেইল যাচাই করুন</string>
+    <string name="auth_verify_email_subtitle">আমরা %1$s ঠিকানায় একটি ভেরিফিকেশন লিংক পাঠিয়েছি। অ্যাকাউন্ট সক্রিয় করতে ইনবক্সের লিংকে ক্লিক করুন।</string>
+    <string name="auth_btn_verified">যাচাই করেছি</string>
+    <string name="auth_btn_resend">পুনরায় ভেরিফিকেশন ইমেইল পাঠান</string>
+    <string name="auth_btn_resend_cooldown">আবার পাঠান (%1$d সেকেন্ড)</string>
+    <string name="auth_reset_password_neutral">ইমেইল নিবন্ধিত থাকলে লিংক পাঠানো হয়েছে</string>
+    <string name="auth_reauth_title">পুনরায় লগইন নিশ্চিত করুন</string>
+    <string name="auth_reauth_message">নিরাপত্তার স্বার্থে অ্যাকাউন্ট মুছে ফেলার আগে আপনার বর্তমান পাসওয়ার্ড দিন।</string>
+    <string name="auth_reauth_password_label">পাসওয়ার্ড</string>
+    <string name="auth_reauth_confirm_btn">নিশ্চিত করুন ও মুছুন</string>
+    <string name="auth_google_cancelled">Google সাইন-ইন বাতিল করা হয়েছে।</string>
+    <string name="auth_google_no_credential">ডিভাইসে কোনো Google অ্যাকাউন্ট পাওয়া যায়নি।</string>
+
+    <!-- FCM Push Notification & Verification Strings (Bengali) -->
+    <string name="fcm_channel_emergency_name">জরুরি রক্তের বার্তা</string>
+    <string name="fcm_channel_emergency_desc">জরুরি রক্তের আবেদন ও ডোনার চ্যাট নোটিফিকেশন</string>
+    <string name="fcm_default_notification_title">রক্তসেতু জরুরি বার্তা</string>
+    <string name="fcm_default_notification_body">রক্তদানের একটি নতুন আপডেট এসেছে।</string>
+    <string name="verification_upload_pick_file">ল্যাব রিপোর্ট ফাইল নির্বাচন করুন (PDF / ছবি)</string>
+    <string name="verification_upload_submit">আপলোড ও জমা দিন</string>
+    <string name="donor_card_saved_success">ডোনার কার্ড ছবি হিসেবে গ্যালারিতে সংরক্ষিত হয়েছে!</string>
+    <string name="donor_card_saved_error">ছবি সংরক্ষণ করা যায়নি। পুনরায় চেষ্টা করুন।</string>
+</resources>

@@ -1,8 +1,11 @@
 package com.example.ui.viewmodel
 
+import android.content.Context
+import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.example.data.firebase.FirebaseAuthService
 import com.example.data.firebase.Resource
 import com.example.data.repository.RoktoSetuRepository
 import com.example.model.AuthState
@@ -10,6 +13,9 @@ import com.example.model.BloodGroup
 import com.example.model.DonorAvailability
 import com.example.model.RegistrationValidationResult
 import com.example.model.UserProfile
+import com.example.model.VerificationStatus
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -19,7 +25,8 @@ data class AuthUiState(
     val isLoading: Boolean = false,
     val errorMessage: String? = null,
     val successMessage: String? = null,
-    val resendCooldownSeconds: Int = 0
+    val resendCooldownSeconds: Int = 0,
+    val requiresReauthForDelete: Boolean = false
 )
 
 class AuthViewModel(
@@ -32,17 +39,47 @@ class AuthViewModel(
     val authState: StateFlow<AuthState> = repository.authState
     val currentUserProfile: StateFlow<UserProfile?> = repository.currentUserProfile
 
+    private var cooldownJob: Job? = null
+
+    private fun isValidEmailFormat(email: String): Boolean {
+        val trimmed = email.trim()
+        if (trimmed.isEmpty()) return false
+        val pattern = android.util.Patterns.EMAIL_ADDRESS
+        return pattern?.matcher(trimmed)?.matches()
+            ?: Regex("^[A-Za-z0-9+_.-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$").matches(trimmed)
+    }
+
+    private fun startResendCooldown(seconds: Int = 60) {
+        cooldownJob?.cancel()
+        cooldownJob = viewModelScope.launch {
+            for (remaining in seconds downTo 1) {
+                _uiState.value = _uiState.value.copy(resendCooldownSeconds = remaining)
+                delay(1000L)
+            }
+            _uiState.value = _uiState.value.copy(resendCooldownSeconds = 0)
+        }
+    }
+
     /**
      * Sign In with Email & Password.
      */
-    fun signIn(email: String, pass: String, onSuccess: () -> Unit = {}) {
+    fun signIn(
+        email: String,
+        pass: String,
+        onSuccess: () -> Unit = {},
+        onAdminSuccess: (() -> Unit)? = null
+    ) {
         val trimmedEmail = email.trim()
         if (trimmedEmail.isBlank() || pass.isBlank()) {
-            _uiState.value = _uiState.value.copy(errorMessage = "Please enter both email and password")
+            _uiState.value = _uiState.value.copy(
+                errorMessage = "অনুগ্রহ করে ইমেইল এবং পাসওয়ার্ড উভয়ই লিখুন (Please enter both email and password)"
+            )
             return
         }
-        if (!android.util.Patterns.EMAIL_ADDRESS.matcher(trimmedEmail).matches()) {
-            _uiState.value = _uiState.value.copy(errorMessage = "Please enter a valid email address")
+        if (!isValidEmailFormat(trimmedEmail)) {
+            _uiState.value = _uiState.value.copy(
+                errorMessage = "অনুগ্রহ করে একটি সঠিক ইমেইল ঠিকানা দিন (Please enter a valid email address)"
+            )
             return
         }
 
@@ -50,8 +87,18 @@ class AuthViewModel(
             _uiState.value = _uiState.value.copy(isLoading = true, errorMessage = null)
             when (val result = repository.signIn(trimmedEmail, pass)) {
                 is Resource.Success -> {
-                    _uiState.value = _uiState.value.copy(isLoading = false)
-                    onSuccess()
+                    val profile = result.data
+                    val isAdminUser = profile.role == com.example.model.UserRole.SUPER_ADMIN ||
+                        profile.role == com.example.model.UserRole.ORGANIZATION_ADMIN
+                    _uiState.value = _uiState.value.copy(
+                        isLoading = false,
+                        successMessage = if (isAdminUser) "অ্যাডমিন লগইন সফল হয়েছে! (Admin login successful)" else null
+                    )
+                    if (isAdminUser && onAdminSuccess != null) {
+                        onAdminSuccess()
+                    } else {
+                        onSuccess()
+                    }
                 }
                 is Resource.Error -> {
                     _uiState.value = _uiState.value.copy(isLoading = false, errorMessage = result.message)
@@ -63,6 +110,7 @@ class AuthViewModel(
 
     /**
      * Validates and registers a new user with strict password and form rules.
+     * Never assigns privileged roles, verified status, or automatic emergency donor flags.
      */
     fun register(
         name: String,
@@ -74,8 +122,11 @@ class AuthViewModel(
         dob: String,
         isDonor: Boolean,
         termsAccepted: Boolean,
-        city: String,
-        area: String,
+        division: String = "Dhaka",
+        district: String = "Dhaka",
+        upazila: String = "",
+        city: String = district,
+        area: String = "",
         onSuccess: () -> Unit = {}
     ) {
         val validation = validateRegistrationInput(name, email, pass, confirmPass, phone, termsAccepted)
@@ -86,7 +137,7 @@ class AuthViewModel(
                 ?: validation.passwordError
                 ?: validation.confirmPasswordError
                 ?: validation.termsError
-                ?: "Please review your input"
+                ?: "অনুগ্রহ করে আপনার তথ্যগুলো যাচাই করুন (Please review your input)"
             _uiState.value = _uiState.value.copy(errorMessage = errorMsg)
             return
         }
@@ -100,15 +151,19 @@ class AuthViewModel(
                 bloodGroup = bloodGroup,
                 isDonor = isDonor,
                 phone = phone.trim(),
-                city = city.trim(),
+                division = division.trim().ifBlank { "Dhaka" },
+                district = district.trim().ifBlank { city.trim().ifBlank { "Dhaka" } },
+                upazila = upazila.trim(),
+                city = city.trim().ifBlank { district.trim().ifBlank { "Dhaka" } },
                 area = area.trim(),
                 dateOfBirth = dob.trim()
             )) {
                 is Resource.Success -> {
                     _uiState.value = _uiState.value.copy(
                         isLoading = false,
-                        successMessage = "Account created! Verification email sent."
+                        successMessage = "অ্যাকাউন্ট তৈরি হয়েছে! ভেরিফিকেশন ইমেইল পাঠানো হয়েছে। (Account created! Verification email sent.)"
                     )
+                    startResendCooldown(60)
                     onSuccess()
                 }
                 is Resource.Error -> {
@@ -120,7 +175,7 @@ class AuthViewModel(
     }
 
     /**
-     * Completes registration input validation.
+     * Completes registration input validation using the shared password policy.
      */
     fun validateRegistrationInput(
         name: String,
@@ -144,7 +199,7 @@ class AuthViewModel(
         }
 
         val trimmedEmail = email.trim()
-        if (trimmedEmail.isEmpty() || !android.util.Patterns.EMAIL_ADDRESS.matcher(trimmedEmail).matches()) {
+        if (!isValidEmailFormat(trimmedEmail)) {
             emailError = "Please provide a valid email address"
             isValid = false
         }
@@ -155,17 +210,9 @@ class AuthViewModel(
             isValid = false
         }
 
-        if (pass.length < 8) {
-            passError = "Password must be at least 8 characters"
-            isValid = false
-        } else if (!pass.any { it.isUpperCase() }) {
-            passError = "Password must contain at least one uppercase letter"
-            isValid = false
-        } else if (!pass.any { it.isLowerCase() }) {
-            passError = "Password must contain at least one lowercase letter"
-            isValid = false
-        } else if (!pass.any { it.isDigit() }) {
-            passError = "Password must contain at least one number"
+        val passwordRuleError = FirebaseAuthService.validatePasswordRules(pass)
+        if (passwordRuleError != null) {
+            passError = passwordRuleError
             isValid = false
         }
 
@@ -191,7 +238,7 @@ class AuthViewModel(
     }
 
     /**
-     * Signs in with Google Id Token.
+     * Signs in with Google Id Token via Jetpack CredentialManager.
      */
     fun signInWithGoogle(idToken: String, onSuccess: () -> Unit = {}) {
         viewModelScope.launch {
@@ -218,26 +265,35 @@ class AuthViewModel(
             val isVerified = repository.checkEmailVerification()
             _uiState.value = _uiState.value.copy(isLoading = false)
             if (isVerified) {
-                _uiState.value = _uiState.value.copy(successMessage = "Email verified successfully!")
+                cooldownJob?.cancel()
+                _uiState.value = _uiState.value.copy(
+                    resendCooldownSeconds = 0,
+                    successMessage = "ইমেইল সফলভাবে যাচাই হয়েছে! (Email verified successfully!)"
+                )
                 onVerified()
             } else {
-                _uiState.value = _uiState.value.copy(errorMessage = "Email not yet verified. Please click the link in your inbox.")
+                _uiState.value = _uiState.value.copy(
+                    errorMessage = "ইমেইল এখনো যাচাই হয়নি। আপনার ইনবক্সের লিংকে ক্লিক করে পুনরায় চেষ্টা করুন। (Email not yet verified. Please click the link in your inbox.)"
+                )
             }
         }
     }
 
     /**
-     * Resends email verification with cooldown protection.
+     * Resends email verification with 60-second cooldown protection.
      */
     fun resendVerificationEmail() {
+        if (_uiState.value.resendCooldownSeconds > 0) return
+
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isLoading = true, errorMessage = null)
             when (val res = repository.sendEmailVerification()) {
                 is Resource.Success -> {
                     _uiState.value = _uiState.value.copy(
                         isLoading = false,
-                        successMessage = "Verification email resent! Please check your inbox and spam folder."
+                        successMessage = "ভেরিফিকেশন ইমেইল পুনরায় পাঠানো হয়েছে! ইনবক্স ও স্প্যাম ফোল্ডার চেক করুন। (Verification email resent!)"
                     )
+                    startResendCooldown(60)
                 }
                 is Resource.Error -> {
                     _uiState.value = _uiState.value.copy(isLoading = false, errorMessage = res.message)
@@ -248,12 +304,14 @@ class AuthViewModel(
     }
 
     /**
-     * Sends Password Reset Email.
+     * Sends Password Reset Email with user-enumeration-safe neutral confirmation message.
      */
     fun sendPasswordReset(email: String) {
         val trimmed = email.trim()
-        if (trimmed.isBlank() || !android.util.Patterns.EMAIL_ADDRESS.matcher(trimmed).matches()) {
-            _uiState.value = _uiState.value.copy(errorMessage = "Please enter a valid account email")
+        if (!isValidEmailFormat(trimmed)) {
+            _uiState.value = _uiState.value.copy(
+                errorMessage = "অনুগ্রহ করে একটি সঠিক ইমেইল ঠিকানা দিন (Please enter a valid account email)"
+            )
             return
         }
         viewModelScope.launch {
@@ -262,7 +320,7 @@ class AuthViewModel(
                 is Resource.Success -> {
                     _uiState.value = _uiState.value.copy(
                         isLoading = false,
-                        successMessage = "If an account exists for $trimmed, password reset instructions have been sent."
+                        successMessage = "ইমেইল নিবন্ধিত থাকলে লিংক পাঠানো হয়েছে (If this email is registered, a password reset link has been sent.)"
                     )
                 }
                 is Resource.Error -> {
@@ -274,7 +332,7 @@ class AuthViewModel(
     }
 
     /**
-     * Completes Profile for newly authenticated users (e.g. Google Sign-In).
+     * Completes Profile for newly authenticated users (e.g. Google Sign-In or profile recovery).
      */
     fun completeProfile(
         name: String,
@@ -283,35 +341,43 @@ class AuthViewModel(
         dob: String,
         isDonor: Boolean,
         donorAvailability: DonorAvailability,
-        isEmergencyDonor: Boolean,
-        city: String,
-        area: String,
+        isEmergencyDonor: Boolean = false,
+        division: String = "Dhaka",
+        district: String = "Dhaka",
+        upazila: String = "",
+        city: String = district,
+        area: String = "",
         photoUrl: String = "",
         onSuccess: () -> Unit = {}
     ) {
         if (name.trim().length < 2 || phone.trim().length < 8) {
-            _uiState.value = _uiState.value.copy(errorMessage = "Please provide your full name and valid contact phone")
+            _uiState.value = _uiState.value.copy(
+                errorMessage = "অনুগ্রহ করে আপনার পূর্ণ নাম এবং সঠিক মোবাইল নম্বর দিন (Please provide your full name and valid contact phone)"
+            )
             return
         }
 
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isLoading = true, errorMessage = null)
             when (val result = repository.completeProfile(
-                name = name,
-                phone = phone,
+                name = name.trim(),
+                phone = phone.trim(),
                 bloodGroup = bloodGroup,
-                dateOfBirth = dob,
+                dateOfBirth = dob.trim(),
                 isDonor = isDonor,
                 donorAvailability = donorAvailability,
                 isEmergencyDonor = isEmergencyDonor,
-                city = city,
-                area = area,
+                division = division.trim().ifBlank { "Dhaka" },
+                district = district.trim().ifBlank { city.trim().ifBlank { "Dhaka" } },
+                upazila = upazila.trim(),
+                city = city.trim().ifBlank { district.trim().ifBlank { "Dhaka" } },
+                area = area.trim(),
                 photoUrl = photoUrl
             )) {
                 is Resource.Success -> {
                     _uiState.value = _uiState.value.copy(
                         isLoading = false,
-                        successMessage = "Profile setup complete! Welcome to RoktoSetu."
+                        successMessage = "প্রোফাইল সম্পন্ন হয়েছে! রক্তসেতুতে স্বাগতম। (Profile setup complete! Welcome to RoktoSetu.)"
                     )
                     onSuccess()
                 }
@@ -330,7 +396,7 @@ class AuthViewModel(
                 is Resource.Success -> {
                     _uiState.value = _uiState.value.copy(
                         isLoading = false,
-                        successMessage = "Profile updated successfully"
+                        successMessage = "প্রোফাইল সফলভাবে আপডেট হয়েছে (Profile updated successfully)"
                     )
                 }
                 is Resource.Error -> {
@@ -349,19 +415,34 @@ class AuthViewModel(
         updateProfile(updated)
     }
 
-    fun signOut(onSignedOut: () -> Unit = {}) {
-        repository.signOut()
-        _uiState.value = AuthUiState()
-        onSignedOut()
+    fun setDonorAvailability(availability: DonorAvailability) {
+        val current = currentUserProfile.value ?: return
+        updateProfile(current.copy(donorAvailability = availability))
     }
 
-    fun deleteAccount(onDeleted: () -> Unit = {}) {
+    fun submitVerificationRequest(documents: List<String>, type: String = "DONOR_CARD") {
+        val current = currentUserProfile.value ?: return
+        if (current.verificationStatus == VerificationStatus.VERIFIED) {
+            _uiState.value = _uiState.value.copy(errorMessage = "আপনার প্রোফাইল ইতিমধ্যে যাচাইকৃত (Your donor profile is already verified).")
+            return
+        }
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isLoading = true, errorMessage = null)
-            when (val res = repository.deleteAccount()) {
+            when (val res = repository.submitVerificationTask(
+                targetId = current.uid,
+                type = type,
+                name = current.name,
+                bloodGroup = current.bloodGroup,
+                documents = documents
+            )) {
                 is Resource.Success -> {
-                    _uiState.value = AuthUiState(successMessage = "Account deleted successfully.")
-                    onDeleted()
+                    if (current.verificationStatus != VerificationStatus.PENDING) {
+                        repository.updateProfile(current.copy(verificationStatus = VerificationStatus.PENDING))
+                    }
+                    _uiState.value = _uiState.value.copy(
+                        isLoading = false,
+                        successMessage = "ভেরিফিকেশন আবেদন অ্যাডমিন রিভিউয়ের জন্য জমা হয়েছে। (Verification request submitted for administrator review.)"
+                    )
                 }
                 is Resource.Error -> {
                     _uiState.value = _uiState.value.copy(isLoading = false, errorMessage = res.message)
@@ -369,6 +450,112 @@ class AuthViewModel(
                 is Resource.Loading -> {}
             }
         }
+    }
+
+    /**
+     * Uploads a user-selected document (PDF/Image <= 10 MB) to Firebase Storage at
+     * `/verifications/{uid}/{docId}` and submits the verification request to Firestore.
+     */
+    fun uploadAndSubmitVerificationRequest(
+        context: Context,
+        fileUri: Uri?,
+        fallbackDocumentRef: String,
+        type: String = "DONOR_CARD"
+    ) {
+        val current = currentUserProfile.value ?: return
+        if (current.verificationStatus == VerificationStatus.VERIFIED) {
+            _uiState.value = _uiState.value.copy(
+                errorMessage = "আপনার প্রোফাইল ইতিমধ্যে যাচাইকৃত (Your donor profile is already verified)."
+            )
+            return
+        }
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isLoading = true, errorMessage = null)
+            val resolvedDocPath = if (fileUri != null) {
+                when (val uploadRes = repository.uploadVerificationDocument(context, current.uid, fileUri)) {
+                    is Resource.Success -> uploadRes.data
+                    is Resource.Error -> {
+                        _uiState.value = _uiState.value.copy(isLoading = false, errorMessage = uploadRes.message)
+                        return@launch
+                    }
+                    is Resource.Loading -> return@launch
+                }
+            } else {
+                fallbackDocumentRef.trim()
+            }
+
+            if (resolvedDocPath.isBlank()) {
+                _uiState.value = _uiState.value.copy(
+                    isLoading = false,
+                    errorMessage = "অনুগ্রহ করে ল্যাব রিপোর্ট ফাইল নির্বাচন করুন বা রেফারেন্স দিন। (Please select a lab report file or provide a reference.)"
+                )
+                return@launch
+            }
+
+            when (val res = repository.submitVerificationTask(
+                targetId = current.uid,
+                type = type,
+                name = current.name,
+                bloodGroup = current.bloodGroup,
+                documents = listOf(resolvedDocPath)
+            )) {
+                is Resource.Success -> {
+                    if (current.verificationStatus != VerificationStatus.PENDING) {
+                        repository.updateProfile(current.copy(verificationStatus = VerificationStatus.PENDING))
+                    }
+                    _uiState.value = _uiState.value.copy(
+                        isLoading = false,
+                        successMessage = "ভেরিফিকেশন ডকুমেন্ট ও আবেদন অ্যাডমিন রিভিউয়ের জন্য জমা হয়েছে। (Verification document & request submitted for review.)"
+                    )
+                }
+                is Resource.Error -> {
+                    _uiState.value = _uiState.value.copy(isLoading = false, errorMessage = res.message)
+                }
+                is Resource.Loading -> {}
+            }
+        }
+    }
+
+    fun reportError(message: String) {
+        _uiState.value = _uiState.value.copy(errorMessage = message)
+    }
+
+    fun signOut(onSignedOut: () -> Unit = {}) {
+        cooldownJob?.cancel()
+        viewModelScope.launch {
+            repository.clearLocalUserCache()
+        }
+        repository.signOut()
+        _uiState.value = AuthUiState()
+        onSignedOut()
+    }
+
+    fun deleteAccount(reauthPassword: String? = null, onDeleted: () -> Unit = {}) {
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isLoading = true, errorMessage = null)
+            when (val res = repository.deleteAccount(reauthPassword)) {
+                is Resource.Success -> {
+                    cooldownJob?.cancel()
+                    _uiState.value = AuthUiState(
+                        successMessage = "অ্যাকাউন্ট সফলভাবে মুছে ফেলা হয়েছে। (Account deleted successfully.)"
+                    )
+                    onDeleted()
+                }
+                is Resource.Error -> {
+                    val needsReauth = FirebaseAuthService.isRecentLoginRequired(res.throwable)
+                    _uiState.value = _uiState.value.copy(
+                        isLoading = false,
+                        requiresReauthForDelete = needsReauth,
+                        errorMessage = res.message
+                    )
+                }
+                is Resource.Loading -> {}
+            }
+        }
+    }
+
+    fun dismissReauthDialog() {
+        _uiState.value = _uiState.value.copy(requiresReauthForDelete = false)
     }
 
     fun clearMessages() {

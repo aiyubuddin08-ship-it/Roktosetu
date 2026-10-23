@@ -10,133 +10,85 @@ object SecurityRulesDefinition {
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    
-    // Default Deny Everything
     match /{document=**} {
       allow read, write: if false;
     }
 
-    // Helper functions
-    function isAuthenticated() {
-      return request.auth != null;
-    }
-    
-    function isOwner(userId) {
-      return isAuthenticated() && request.auth.uid == userId;
-    }
-    
+    function isSignedIn() { return request.auth != null; }
+    function isOwner(userId) { return isSignedIn() && request.auth.uid == userId; }
     function isAdmin() {
-      return isAuthenticated() && request.auth.token.admin == true;
-    }
-    
-    function isOrgAdmin(orgId) {
-      return isAuthenticated() && (
-        isAdmin() || 
-        request.auth.token.orgId == orgId ||
-        request.auth.uid in get(/databases/$(database)/documents/organizations/$(orgId)).data.adminUids
+      return isSignedIn() && (
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+        ('admin' in request.auth.token && request.auth.token.admin == true)
       );
     }
 
-    // 1. Users Collection - Strict Ownership & Protected Sensitive Fields
+    // 0. Trusted Admin Registry (/admins/{adminUid}) - Server-Managed Only
+    match /admins/{adminUid} {
+      allow get: if isOwner(adminUid) || isAdmin();
+      allow list, create, update, delete: if false;
+    }
+
+    // 1. Private User Profiles (/users/{userId}) - Strictly isolated to owner & admin
     match /users/{userId} {
-      // Authenticated users can read public user data
-      allow read: if isAuthenticated();
-      
-      // Only user can create their own document with role == 'USER'
-      allow create: if isOwner(userId) 
-        && request.resource.data.role == 'USER'
-        && request.resource.data.verificationStatus == 'UNVERIFIED'
-        && request.resource.data.donationCount == 0;
-      
-      // User can update basic profile fields, but NOT role, points, donationCount, or verificationStatus
-      allow update: if (isOwner(userId) && 
+      allow get: if isOwner(userId) || isAdmin();
+      allow list: if isSignedIn() && (resource.data.uid == request.auth.uid || isAdmin());
+      allow create: if isOwner(userId) &&
+        request.resource.data.role == 'USER' &&
+        request.resource.data.verificationStatus == 'UNVERIFIED' &&
+        request.resource.data.donationCount == 0 &&
+        request.resource.data.isEmergencyDonor == false;
+      allow update: if (isOwner(userId) &&
         !request.resource.data.diff(resource.data).affectedKeys().hasAny([
-          'role', 'verificationStatus', 'donationCount', 'createdAt'
+          'uid', 'role', 'verificationStatus', 'donationCount', 'badges', 'organizationId', 'createdAt'
         ])) || isAdmin();
-        
       allow delete: if isOwner(userId) || isAdmin();
-      
-      // Notifications subcollection - read only by recipient; written by backend/admin
-      match /notifications/{notificationId} {
-        allow read: if isOwner(userId);
-        allow write: if isAdmin(); // Normal users cannot inject notifications to other users
-      }
     }
 
-    // 2. Blood Requests - Creator Ownership and Controlled Status Transitions
+    // 2. Sanitized Public Donors (/public_donors/{donorUid}) - No private email/DOB/hidden phone
+    match /public_donors/{donorUid} {
+      allow get, list: if isSignedIn() && (resource.data.isDonor == true || isAdmin());
+      allow create: if isOwner(donorUid) &&
+        request.resource.data.verificationStatus == 'UNVERIFIED' &&
+        request.resource.data.donationCount == 0;
+      allow update: if (isOwner(donorUid) &&
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+          'uid', 'verificationStatus', 'donationCount'
+        ])) || isAdmin();
+      allow delete: if isOwner(donorUid) || isAdmin();
+    }
+
+    // 3. Emergency Blood Requests (/blood_requests/{requestId}) - Validated Status Transitions
     match /blood_requests/{requestId} {
-      allow read: if isAuthenticated();
-      
-      // Authenticated users can create requests with initial 'PENDING' status
-      allow create: if isAuthenticated() 
-        && request.resource.data.requesterUid == request.auth.uid
-        && request.resource.data.status == 'PENDING';
-        
-      // Only requester or admin can update core details or cancel
-      // Donors can commit to accept (via trusted function or restricted state change)
-      allow update: if isAuthenticated() && (
-        isOwner(resource.data.requesterUid) || 
+      allow get, list: if isSignedIn();
+      allow create: if isSignedIn() &&
+        request.resource.data.requesterUid == request.auth.uid &&
+        request.resource.data.status == 'PENDING';
+      allow update: if isSignedIn() && (
         isAdmin() ||
-        (
-          // Donor committing to help (status changes from PENDING to ACCEPTED)
-          resource.data.status == 'PENDING' && 
-          request.resource.data.status == 'ACCEPTED' &&
-          request.resource.data.acceptedDonorUid == request.auth.uid
-        )
-      );
-      
-      allow delete: if (isAuthenticated() && isOwner(resource.data.requesterUid)) || isAdmin();
-    }
-
-    // 3. Donation Records - Read by donor/org/admin; Written only by verified Org/Admin or Trusted Function
-    match /donations/{donationId} {
-      allow read: if isAuthenticated() && (
-        isOwner(resource.data.donorUid) || 
-        isAdmin() ||
-        (resource.data.verifiedByOrgId != null && isOrgAdmin(resource.data.verifiedByOrgId))
-      );
-      
-      // Users CANNOT forge their own donation records or points directly
-      allow create, update, delete: if isAdmin() || (
-        request.resource.data.verifiedByOrgId != null && 
-        isOrgAdmin(request.resource.data.verifiedByOrgId)
+        (!(resource.data.status in ['FULFILLED', 'CANCELLED', 'EXPIRED']) && (
+          // Donor accepts PENDING request
+          (request.auth.uid != resource.data.requesterUid &&
+           resource.data.status == 'PENDING' &&
+           request.resource.data.status in ['DONOR_RESPONDED', 'ACCEPTED'] &&
+           request.resource.data.acceptedDonorUid == request.auth.uid &&
+           request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+             'status', 'acceptedDonorUid', 'acceptedDonorName', 'respondedDonorUids', 'updatedAt'
+           ])) ||
+          // Requester marks FULFILLED after donor response or CANCELLED
+          (isOwner(resource.data.requesterUid) &&
+           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt']))
+        ))
       );
     }
 
-    // 4. Organizations - Read by all authenticated users; Write by Org Admin / Super Admin
-    match /organizations/{orgId} {
-      allow read: if isAuthenticated();
-      allow create: if isAuthenticated(); // Subject to admin verification
-      allow update: if isOrgAdmin(orgId);
-      allow delete: if isAdmin();
-      
-      match /campaigns/{campaignId} {
-        allow read: if isAuthenticated();
-        allow write: if isOrgAdmin(orgId);
-      }
-    }
-
-    // 5. 1-to-1 Conversations and Messages - Strict Participant Isolation
+    // 4. Conversations & Messages - Immutable Participant List & Strict Isolation
     match /conversations/{convId} {
-      allow read: if isAuthenticated() && (request.auth.uid in resource.data.participants);
-      allow create: if isAuthenticated() && (request.auth.uid in request.resource.data.participants);
-      allow update: if isAuthenticated() && (request.auth.uid in resource.data.participants);
-      
-      match /messages/{messageId} {
-        allow read: if isAuthenticated() && (
-          request.auth.uid in get(/databases/$(database)/documents/conversations/$(convId)).data.participants
-        );
-        allow create: if isAuthenticated() && (
-          request.auth.uid == request.resource.data.senderUid &&
-          request.auth.uid in get(/databases/$(database)/documents/conversations/$(convId)).data.participants
-        );
-        allow update, delete: if false; // Immutable audit trail
-      }
-    }
-
-    // 6. Audit Logs & System Controls - Admin Only
-    match /audit_logs/{logId} {
-      allow read, write: if isAdmin();
+      allow get, list: if isSignedIn() && (request.auth.uid in resource.data.participants);
+      allow create: if isSignedIn() && (request.auth.uid in request.resource.data.participants);
+      allow update: if isSignedIn() &&
+        (request.auth.uid in resource.data.participants) &&
+        request.resource.data.participants == resource.data.participants;
     }
   }
 }
@@ -146,44 +98,36 @@ service cloud.firestore {
 rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
-    
-    // Default Deny
     match /{allPaths=**} {
       allow read, write: if false;
     }
-
-    // Profile photos - Read by all users; Written only by photo owner (Max 5MB, Image MIME)
-    match /users/{userId}/profile.jpg {
-      allow read: if request.auth != null;
-      allow write: if request.auth != null && request.auth.uid == userId 
-        && request.resource.size < 5 * 1024 * 1024
-        && request.resource.contentType.matches('image/.*');
-    }
-
-    // Verification documents - Strictly private: Read only by user & admin; Write by user
-    match /verifications/{userId}/{documentId} {
-      allow read: if request.auth != null && (request.auth.uid == userId || request.auth.token.admin == true);
-      allow write: if request.auth != null && request.auth.uid == userId
-        && request.resource.size < 10 * 1024 * 1024;
-    }
-
-    // Organization assets
-    match /organizations/{orgId}/{fileName} {
-      allow read: if request.auth != null;
-      allow write: if request.auth != null && (
-        request.auth.token.admin == true || 
-        request.auth.token.orgId == orgId
+    function isAdmin() {
+      return request.auth != null && (
+        ('admin' in request.auth.token && request.auth.token.admin == true) ||
+        firestore.exists(/databases/ai-studio-android-lifelink-32b78329-0908-44db-bbd3-9204072ef691/documents/admins/$(request.auth.uid))
       );
+    }
+    match /users/{userId}/{fileName} {
+      allow read: if request.auth != null;
+      allow create, update: if request.auth != null && request.auth.uid == userId
+        && fileName.matches('^profile\\.(jpg|jpeg|png|webp)$')
+        && request.resource.size <= 5 * 1024 * 1024
+        && request.resource.contentType.matches('image/(jpeg|png|webp)');
+    }
+    match /verifications/{userId}/{documentId} {
+      allow read: if request.auth != null && (request.auth.uid == userId || isAdmin());
+      allow create, update: if request.auth != null && request.auth.uid == userId
+        && request.resource.size <= 10 * 1024 * 1024;
     }
   }
 }
 """.trimIndent()
 
     val CLOUD_FUNCTIONS_SPECIFICATION: List<String> = listOf(
-        "sendEmergencyBroadcast: Validates emergency blood request and securely triggers FCM multicast notification to nearby compatible donors without exposing donor tokens or allowing arbitrary client messaging.",
-        "verifyDonationAndAwardBadge: Organization or hospital verifies blood donation, atomically creates verified DonationRecord, increments user's donationCount, and assigns milestone badges.",
-        "setUserCustomClaims: Super-admin trusted function to assign role claims ('admin': true, 'orgId': 'org123') in Firebase Auth tokens.",
-        "fulfillBloodRequest: Atomically marks blood request as fulfilled and sends confirmation notification to requester and donor.",
-        "auditLogWriter: Server-side trigger to log security events and administrative actions to 'audit_logs' collection with immutable timestamps and actor tracking."
+        "sendEmergencyBroadcast: Enforces App Check & Auth, verifies request ownership, and dispatches FCM notifications strictly to available compatible donors in the matching division/district (idempotent).",
+        "acceptBloodRequest: Runs a Firestore transaction to verify blood group compatibility, prevent self-acceptance or race conditions, and record donor response.",
+        "verifyDonation: Restricted to verified organizations & super-admins; uses deterministic IDs in a transaction to prevent duplicate donation records and update donor resting status.",
+        "reviewVerificationRequest: Super-admin transactional workflow to approve/reject donor or organization verification tasks and record immutable audit logs.",
+        "expireStaleBloodRequests: Scheduled background job that automatically transitions expired PENDING requests to EXPIRED."
     )
 }

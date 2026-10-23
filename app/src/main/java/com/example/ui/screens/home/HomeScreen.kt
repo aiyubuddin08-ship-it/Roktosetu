@@ -1,5 +1,10 @@
 package com.example.ui.screens.home
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -64,10 +69,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import com.example.domain.BloodCompatibilityHelper
 import com.example.model.BloodGroup
 import com.example.model.DonorAvailability
@@ -80,6 +87,7 @@ import com.example.ui.components.RoktoTopAppBar
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.CreditCard
 import androidx.compose.material.icons.filled.LocalHospital
+import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.Message
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.QrCode
@@ -118,6 +126,7 @@ fun HomeScreen(
     onNavigateToLogin: () -> Unit = {},
     onNavigateToRegister: () -> Unit = {}
 ) {
+    val context = LocalContext.current
     val currentUserProfile by authViewModel.currentUserProfile.collectAsState()
     val bloodState by bloodViewModel.uiState.collectAsState()
     val extraState by extraViewModel.uiState.collectAsState()
@@ -129,8 +138,35 @@ fun HomeScreen(
     var testRecipientBlood by remember { mutableStateOf<BloodGroup?>(null) }
     var showAuthPromptDialog by remember { mutableStateOf(false) }
 
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { _ -> }
+
+    LaunchedEffect(currentUserProfile?.uid) {
+        if (currentUserProfile != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val hasPermission = ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) == PackageManager.PERMISSION_GRANTED
+            if (!hasPermission) {
+                try {
+                    notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                } catch (_: Exception) {
+                    // Safely ignore in headless test environments without an ActivityResultRegistry
+                }
+            }
+        }
+    }
+
     LaunchedEffect(bloodState.successMessage) {
         bloodState.successMessage?.let {
+            snackbarHostState.showSnackbar(it)
+            bloodViewModel.clearMessages()
+        }
+    }
+
+    LaunchedEffect(bloodState.errorMessage) {
+        bloodState.errorMessage?.let {
             snackbarHostState.showSnackbar(it)
             bloodViewModel.clearMessages()
         }
@@ -243,6 +279,64 @@ fun HomeScreen(
                             shape = RoundedCornerShape(10.dp)
                         ) {
                             Text("FIND NOW", color = EmergencyRed, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        }
+                    }
+                }
+            }
+
+            // Regional Donor Directory Quick CTA Card (Map-Free)
+            item {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onNavigateToDonors() }
+                        .testTag("card_donor_directory_cta"),
+                    shape = RoundedCornerShape(18.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.65f)
+                    )
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(46.dp)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.primary),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.People,
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.size(26.dp)
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.width(14.dp))
+
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = if (isBangla) "বিভাগ, জেলা ও উপজেলাভিত্তিক রক্তদাতা অনুসন্ধান" else "Search Donors by Division, District & Upazila",
+                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.ExtraBold)
+                            )
+                            Text(
+                                text = "${bloodState.donors.size} registered donors • Exact & compatible RBC matching",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer
+                            )
+                        }
+
+                        Button(
+                            onClick = onNavigateToDonors,
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                        ) {
+                            Text(if (isBangla) "তালিকা দেখুন" else "SEARCH", fontWeight = FontWeight.Bold, fontSize = 12.sp)
                         }
                     }
                 }
@@ -463,6 +557,16 @@ fun HomeScreen(
                                 Text(eligibility.nextEligibleDateString ?: "N/A", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
                             }
                         }
+
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = if (isBangla)
+                                "দ্রষ্টব্য: ৯০ দিনের বিরতি একটি সাধারণ নির্দেশিকা মাত্র। রক্তদানের চূড়ান্ত উপযুক্ততা সর্বদা চিকিৎসক ও ব্লাড ব্যাংকের স্বাস্থ্য পরীক্ষার ওপর নির্ভরশীল।"
+                            else
+                                "Note: The 90-day interval is an informational guideline only. Final medical eligibility is always determined by a qualified physician or blood bank.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                 }
             }
@@ -585,7 +689,7 @@ fun HomeScreen(
                             ) {
                                 Column(modifier = Modifier.padding(10.dp)) {
                                     Text(
-                                        text = "Patient ${rec.display} can safely receive from:",
+                                        text = "Patient ${rec.display} Red Blood Cell (RBC) Compatibility:",
                                         style = MaterialTheme.typography.labelMedium,
                                         fontWeight = FontWeight.Bold,
                                         color = MaterialTheme.colorScheme.primary
@@ -595,20 +699,27 @@ fun HomeScreen(
                                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                                     ) {
                                         compatible.forEach { comp ->
+                                            val isExact = comp == rec
                                             Surface(
-                                                color = BloodSuccessContainer,
+                                                color = if (isExact) EmergencyRed else BloodSuccessContainer,
                                                 shape = RoundedCornerShape(6.dp)
                                             ) {
                                                 Text(
-                                                    text = comp.display,
+                                                    text = if (isExact) "${comp.display} (Exact)" else "${comp.display} (Compatible)",
                                                     style = MaterialTheme.typography.labelSmall,
-                                                    color = BloodSuccessGreen,
+                                                    color = if (isExact) Color.White else BloodSuccessGreen,
                                                     fontWeight = FontWeight.Bold,
                                                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                                                 )
                                             }
                                         }
                                     }
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                    Text(
+                                        text = if (isBangla) BloodCompatibilityHelper.CLINICAL_DISCLAIMER_BN else BloodCompatibilityHelper.CLINICAL_DISCLAIMER_EN,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
                                 }
                             }
                         }
@@ -674,8 +785,13 @@ fun HomeScreen(
                 items(bloodState.requests) { req ->
                     BloodRequestItemCard(
                         request = req,
+                        canAccept = currentUserProfile?.uid != req.requesterUid,
                         onAcceptClick = {
-                            bloodViewModel.acceptRequest(req.id) {}
+                            if (currentUserProfile != null) {
+                                onNavigateToRequestDetails(req.id)
+                            } else {
+                                showAuthPromptDialog = true
+                            }
                         },
                         onCardClick = {
                             onNavigateToRequestDetails(req.id)

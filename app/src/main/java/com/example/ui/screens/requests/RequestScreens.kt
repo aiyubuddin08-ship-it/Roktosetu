@@ -3,7 +3,6 @@ package com.example.ui.screens.requests
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,19 +22,17 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.Bloodtype
 import androidx.compose.material.icons.filled.Call
+import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.Chat
-import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Emergency
 import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.HealthAndSafety
 import androidx.compose.material.icons.filled.LocalHospital
-import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Verified
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -58,6 +55,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -77,17 +75,15 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.domain.BloodCompatibilityHelper
+import com.example.domain.LocationHelper
 import com.example.model.BloodGroup
-import com.example.model.BloodRequest
 import com.example.model.RequestStatus
 import com.example.model.RequestUrgency
 import com.example.ui.components.AuthRequiredDialog
 import com.example.ui.components.BloodGroupBadge
 import com.example.ui.components.StatusChip
 import com.example.ui.components.UrgencyBadge
-import com.example.ui.theme.BloodGold
-import com.example.ui.theme.BloodRed
-import com.example.ui.theme.BloodSuccessContainer
 import com.example.ui.theme.BloodSuccessGreen
 import com.example.ui.theme.EmergencyRed
 import com.example.ui.theme.EmergencyRedContainer
@@ -113,14 +109,27 @@ fun CreateRequestScreen(
     var selectedBloodGroup by remember { mutableStateOf(BloodGroup.A_POSITIVE) }
     var unitsRequired by remember { mutableStateOf(1) }
     var hospitalName by remember { mutableStateOf("") }
+    var division by remember { mutableStateOf(currentUserProfile?.location?.division?.ifBlank { "Dhaka" } ?: "Dhaka") }
+    var district by remember { mutableStateOf(currentUserProfile?.location?.district?.ifBlank { "Dhaka" } ?: "Dhaka") }
+    var upazila by remember { mutableStateOf(currentUserProfile?.location?.upazila ?: "") }
     var hospitalAddress by remember { mutableStateOf("") }
-    var city by remember { mutableStateOf("Dhaka") }
     var urgency by remember { mutableStateOf(RequestUrgency.HIGH) }
-    var contactPhone by remember { mutableStateOf("") }
+    var contactPhone by remember { mutableStateOf(currentUserProfile?.contactPhone ?: "") }
     var medicalReason by remember { mutableStateOf("") }
     var isEmergencyBroadcast by remember { mutableStateOf(true) }
 
     var expandedBloodMenu by remember { mutableStateOf(false) }
+    var expandedDivisionMenu by remember { mutableStateOf(false) }
+    var expandedDistrictMenu by remember { mutableStateOf(false) }
+    var expandedUpazilaMenu by remember { mutableStateOf(false) }
+
+    val availableDistricts = remember(division) {
+        LocationHelper.getDistrictsForDivision(division)
+    }
+    val availableUpazilas = remember(district) {
+        LocationHelper.getUpazilasForDistrict(district)
+    }
+
     val snackbarHostState = remember { SnackbarHostState() }
 
     LaunchedEffect(uiState.errorMessage) {
@@ -204,6 +213,7 @@ fun CreateRequestScreen(
             }
             return@Scaffold
         }
+
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -241,7 +251,7 @@ fun CreateRequestScreen(
                     OutlinedTextField(
                         value = patientName,
                         onValueChange = { patientName = it },
-                        label = { Text("Patient Name (রোগীর নাম)") },
+                        label = { Text("Patient Name (রোগীর নাম) *") },
                         leadingIcon = { Icon(Icons.Default.Person, contentDescription = null) },
                         modifier = Modifier.fillMaxWidth().testTag("input_req_patient_name"),
                         singleLine = true
@@ -270,7 +280,7 @@ fun CreateRequestScreen(
                                 value = selectedBloodGroup.display,
                                 onValueChange = {},
                                 readOnly = true,
-                                label = { Text("Blood Group") },
+                                label = { Text("Blood Group *") },
                                 trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandedBloodMenu) },
                                 modifier = Modifier.fillMaxWidth().menuAnchor()
                             )
@@ -327,12 +337,12 @@ fun CreateRequestScreen(
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
             ) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("Hospital & Location", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold))
+                    Text("Hospital & Collection Location", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold))
 
                     OutlinedTextField(
                         value = hospitalName,
                         onValueChange = { hospitalName = it },
-                        label = { Text("Hospital / Clinic Name (হাসপাতালের নাম)") },
+                        label = { Text("Hospital / Clinic Name (হাসপাতালের নাম) *") },
                         leadingIcon = { Icon(Icons.Default.LocalHospital, contentDescription = null) },
                         modifier = Modifier.fillMaxWidth().testTag("input_req_hospital"),
                         singleLine = true
@@ -342,17 +352,119 @@ fun CreateRequestScreen(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        OutlinedTextField(
-                            value = city,
-                            onValueChange = { city = it },
-                            label = { Text("City (শহর)") },
-                            modifier = Modifier.weight(1f),
-                            singleLine = true
-                        )
+                        ExposedDropdownMenuBox(
+                            expanded = expandedDivisionMenu,
+                            onExpandedChange = { expandedDivisionMenu = !expandedDivisionMenu },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            OutlinedTextField(
+                                value = division,
+                                onValueChange = {},
+                                readOnly = true,
+                                label = { Text("Division (বিভাগ)") },
+                                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandedDivisionMenu) },
+                                modifier = Modifier.fillMaxWidth().menuAnchor(),
+                                singleLine = true
+                            )
+                            ExposedDropdownMenu(
+                                expanded = expandedDivisionMenu,
+                                onDismissRequest = { expandedDivisionMenu = false }
+                            ) {
+                                LocationHelper.DIVISIONS.forEach { div ->
+                                    DropdownMenuItem(
+                                        text = { Text(div) },
+                                        onClick = {
+                                            division = div
+                                            val firstDist = LocationHelper.getDistrictsForDivision(div).firstOrNull() ?: div
+                                            district = firstDist
+                                            upazila = ""
+                                            expandedDivisionMenu = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+
+                        ExposedDropdownMenuBox(
+                            expanded = expandedDistrictMenu,
+                            onExpandedChange = { expandedDistrictMenu = !expandedDistrictMenu },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            OutlinedTextField(
+                                value = district,
+                                onValueChange = {},
+                                readOnly = true,
+                                label = { Text("District (জেলা)") },
+                                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandedDistrictMenu) },
+                                modifier = Modifier.fillMaxWidth().menuAnchor(),
+                                singleLine = true
+                            )
+                            ExposedDropdownMenu(
+                                expanded = expandedDistrictMenu,
+                                onDismissRequest = { expandedDistrictMenu = false }
+                            ) {
+                                availableDistricts.forEach { dist ->
+                                    DropdownMenuItem(
+                                        text = { Text(dist) },
+                                        onClick = {
+                                            district = dist
+                                            upazila = ""
+                                            expandedDistrictMenu = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        if (availableUpazilas.isNotEmpty()) {
+                            ExposedDropdownMenuBox(
+                                expanded = expandedUpazilaMenu,
+                                onExpandedChange = { expandedUpazilaMenu = !expandedUpazilaMenu },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                OutlinedTextField(
+                                    value = upazila.ifBlank { "Select Upazila" },
+                                    onValueChange = {},
+                                    readOnly = true,
+                                    label = { Text("Upazila / Thana") },
+                                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandedUpazilaMenu) },
+                                    modifier = Modifier.fillMaxWidth().menuAnchor(),
+                                    singleLine = true
+                                )
+                                ExposedDropdownMenu(
+                                    expanded = expandedUpazilaMenu,
+                                    onDismissRequest = { expandedUpazilaMenu = false }
+                                ) {
+                                    availableUpazilas.forEach { upz ->
+                                        DropdownMenuItem(
+                                            text = { Text(upz) },
+                                            onClick = {
+                                                upazila = upz
+                                                expandedUpazilaMenu = false
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+                        } else {
+                            OutlinedTextField(
+                                value = upazila,
+                                onValueChange = { upazila = it },
+                                label = { Text("Upazila / Thana") },
+                                modifier = Modifier.weight(1f),
+                                singleLine = true
+                            )
+                        }
+
                         OutlinedTextField(
                             value = hospitalAddress,
                             onValueChange = { hospitalAddress = it },
-                            label = { Text("Area / Address") },
+                            label = { Text("Area / Ward / Address") },
                             modifier = Modifier.weight(1f),
                             singleLine = true
                         )
@@ -361,7 +473,7 @@ fun CreateRequestScreen(
                     OutlinedTextField(
                         value = contactPhone,
                         onValueChange = { contactPhone = it },
-                        label = { Text("Contact Phone (জরুরী যোগাযোগের নম্বর)") },
+                        label = { Text("Contact Phone (জরুরী যোগাযোগের নম্বর) *") },
                         leadingIcon = { Icon(Icons.Default.Phone, contentDescription = null) },
                         modifier = Modifier.fillMaxWidth().testTag("input_req_phone"),
                         singleLine = true,
@@ -394,7 +506,7 @@ fun CreateRequestScreen(
                         style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold, color = EmergencyRed)
                     )
                     Text(
-                        text = "Broadcast immediately to nearby donors via Firebase Cloud Messaging",
+                        text = "Notify medically compatible donors in $district via Firebase Cloud Messaging",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -415,7 +527,11 @@ fun CreateRequestScreen(
                         unitsRequired = unitsRequired,
                         hospitalName = hospitalName,
                         hospitalAddress = hospitalAddress,
-                        city = city,
+                        division = division,
+                        district = district,
+                        upazila = upazila,
+                        city = district,
+                        area = hospitalAddress,
                         urgency = urgency,
                         contactPhone = contactPhone,
                         medicalReason = medicalReason,
@@ -461,8 +577,28 @@ fun RequestDetailScreen(
     val currentUserProfile by authViewModel.currentUserProfile.collectAsState()
     val bloodState by bloodViewModel.uiState.collectAsState()
     val request = bloodState.requests.firstOrNull { it.id == requestId }
+
     var showAuthPromptDialog by remember { mutableStateOf(false) }
     var authPromptMessage by remember { mutableStateOf("এই সুবিধাটি ব্যবহার করতে অনুগ্রহ করে লগইন করুন।") }
+
+    var showAcceptConfirm by remember { mutableStateOf(false) }
+    var showFulfillConfirm by remember { mutableStateOf(false) }
+    var showCancelConfirm by remember { mutableStateOf(false) }
+
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    LaunchedEffect(bloodState.errorMessage) {
+        bloodState.errorMessage?.let {
+            snackbarHostState.showSnackbar(it)
+            bloodViewModel.clearMessages()
+        }
+    }
+    LaunchedEffect(bloodState.successMessage) {
+        bloodState.successMessage?.let {
+            snackbarHostState.showSnackbar(it)
+            bloodViewModel.clearMessages()
+        }
+    }
 
     if (showAuthPromptDialog) {
         AuthRequiredDialog(
@@ -484,13 +620,97 @@ fun RequestDetailScreen(
                     }
                 }
             )
-        }
+        },
+        snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { padding ->
         if (request == null) {
             Box(modifier = Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
                 Text("Request details not found or completed.")
             }
             return@Scaffold
+        }
+
+        val isOwner = currentUserProfile?.uid == request.requesterUid
+        val isDonorAssigned = request.status == RequestStatus.DONOR_RESPONDED || request.status == RequestStatus.ACCEPTED
+
+        if (showAcceptConfirm) {
+            AlertDialog(
+                onDismissRequest = { showAcceptConfirm = false },
+                title = { Text("Confirm Blood Donation Commitment", fontWeight = FontWeight.Bold) },
+                text = {
+                    Text(
+                        "Are you sure you can donate blood for ${request.patientName} at ${request.hospitalName}?\n\n" +
+                                BloodCompatibilityHelper.CLINICAL_DISCLAIMER_EN
+                    )
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            showAcceptConfirm = false
+                            bloodViewModel.acceptRequest(request.id) {}
+                        }
+                    ) {
+                        Text("Confirm & Respond")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showAcceptConfirm = false }) {
+                        Text("Cancel")
+                    }
+                }
+            )
+        }
+
+        if (showFulfillConfirm) {
+            AlertDialog(
+                onDismissRequest = { showFulfillConfirm = false },
+                title = { Text("Mark Request as Fulfilled?", fontWeight = FontWeight.Bold) },
+                text = {
+                    Text("Confirm that the patient has received the required blood units at the hospital. This will close the active request.")
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            showFulfillConfirm = false
+                            bloodViewModel.updateRequestStatus(request.id, RequestStatus.FULFILLED)
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = BloodSuccessGreen)
+                    ) {
+                        Text("Confirm Fulfilled")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showFulfillConfirm = false }) {
+                        Text("Not Yet")
+                    }
+                }
+            )
+        }
+
+        if (showCancelConfirm) {
+            AlertDialog(
+                onDismissRequest = { showCancelConfirm = false },
+                title = { Text("Cancel Blood Request?", fontWeight = FontWeight.Bold) },
+                text = {
+                    Text("Are you sure you want to cancel this blood request? Donors will no longer see it as active.")
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            showCancelConfirm = false
+                            bloodViewModel.updateRequestStatus(request.id, RequestStatus.CANCELLED)
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                    ) {
+                        Text("Yes, Cancel Request")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showCancelConfirm = false }) {
+                        Text("Keep Active")
+                    }
+                }
+            )
         }
 
         Column(
@@ -529,6 +749,14 @@ fun RequestDetailScreen(
 
                     Spacer(modifier = Modifier.height(16.dp))
 
+                    val formattedLocation = LocationHelper.formatGeneralLocation(
+                        division = request.division,
+                        district = request.district,
+                        upazila = request.upazila,
+                        area = request.area.ifBlank { request.hospitalAddress },
+                        city = request.city
+                    )
+
                     // Patient Details
                     Surface(
                         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
@@ -537,11 +765,36 @@ fun RequestDetailScreen(
                     ) {
                         Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             Text("Patient: ${request.patientName} (${request.patientAge} years)", fontWeight = FontWeight.SemiBold)
-                            Text("Hospital: ${request.hospitalName}, ${request.city}", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text("Hospital: ${request.hospitalName}", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text("Location: $formattedLocation", color = MaterialTheme.colorScheme.onSurfaceVariant)
                             if (request.medicalReason.isNotBlank()) {
                                 Text("Reason: ${request.medicalReason}", color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
+                            if (isDonorAssigned && !request.acceptedDonorName.isNullOrBlank()) {
+                                Text(
+                                    text = "Responding Donor: ${request.acceptedDonorName}",
+                                    color = BloodSuccessGreen,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
                         }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.HealthAndSafety,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = BloodCompatibilityHelper.CLINICAL_DISCLAIMER_EN,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                 }
             }
@@ -553,7 +806,7 @@ fun RequestDetailScreen(
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
-                    Text("Contact Requester", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold))
+                    Text("Contact Requester (${request.requesterName})", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold))
                     Text(
                         text = "Phone: ${request.contactPhone}",
                         style = MaterialTheme.typography.bodyMedium,
@@ -579,46 +832,48 @@ fun RequestDetailScreen(
                             Text("Direct Call", fontWeight = FontWeight.Bold)
                         }
 
-                        OutlinedButton(
-                            onClick = {
-                                if (currentUserProfile != null) {
-                                    chatViewModel.startChatWithDonor(
-                                        donorUid = request.requesterUid,
-                                        donorName = request.requesterName,
-                                        donorBloodGroup = request.bloodGroup.display,
-                                        requestId = request.id,
-                                        onReady = { convId ->
-                                            onNavigateToChatConversation(convId, request.requesterName, request.bloodGroup.display)
-                                        }
-                                    )
-                                } else {
-                                    authPromptMessage = "রোগীর বা আবেদনকারীর সাথে ১-টু-১ চ্যাট করতে অনুগ্রহ করে লগইন করুন।"
-                                    showAuthPromptDialog = true
-                                }
-                            },
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(10.dp)
-                        ) {
-                            Icon(Icons.Default.Chat, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Direct Chat")
+                        if (!isOwner) {
+                            OutlinedButton(
+                                onClick = {
+                                    if (currentUserProfile != null) {
+                                        chatViewModel.startChatWithDonor(
+                                            donorUid = request.requesterUid,
+                                            donorName = request.requesterName,
+                                            donorBloodGroup = request.bloodGroup.display,
+                                            requestId = request.id,
+                                            onReady = { convId ->
+                                                onNavigateToChatConversation(convId, request.requesterName, request.bloodGroup.display)
+                                            }
+                                        )
+                                    } else {
+                                        authPromptMessage = "রোগীর বা আবেদনকারীর সাথে ১-টু-১ চ্যাট করতে অনুগ্রহ করে লগইন করুন।"
+                                        showAuthPromptDialog = true
+                                    }
+                                },
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(10.dp)
+                            ) {
+                                Icon(Icons.Default.Chat, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Direct Chat")
+                            }
                         }
                     }
                 }
             }
 
-            // Status Actions
-            if (request.status == RequestStatus.PENDING) {
+            // Status Actions with Role & Lifecycle Validation
+            if (request.status == RequestStatus.PENDING && !isOwner) {
                 Button(
                     onClick = {
                         if (currentUserProfile != null) {
-                            bloodViewModel.acceptRequest(request.id) {}
+                            showAcceptConfirm = true
                         } else {
                             authPromptMessage = "রোগীর জন্য রক্তদানের অঙ্গীকার করতে অনুগ্রহ করে সাইন ইন করুন।"
                             showAuthPromptDialog = true
                         }
                     },
-                    modifier = Modifier.fillMaxWidth().height(50.dp),
+                    modifier = Modifier.fillMaxWidth().height(50.dp).testTag("btn_detail_accept_request"),
                     shape = RoundedCornerShape(12.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
                 ) {
@@ -626,23 +881,30 @@ fun RequestDetailScreen(
                     Spacer(modifier = Modifier.width(8.dp))
                     Text("I Can Donate for this Patient", fontWeight = FontWeight.Bold)
                 }
-            } else if (request.status == RequestStatus.ACCEPTED) {
+            }
+
+            if (isOwner && isDonorAssigned) {
                 Button(
-                    onClick = {
-                        if (currentUserProfile != null) {
-                            bloodViewModel.updateRequestStatus(request.id, RequestStatus.FULFILLED)
-                        } else {
-                            authPromptMessage = "রক্তদানের স্ট্যাটাস পরিবর্তন করতে অনুগ্রহ করে সাইন ইন করুন।"
-                            showAuthPromptDialog = true
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth().height(50.dp),
+                    onClick = { showFulfillConfirm = true },
+                    modifier = Modifier.fillMaxWidth().height(50.dp).testTag("btn_detail_fulfill_request"),
                     shape = RoundedCornerShape(12.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = BloodSuccessGreen)
                 ) {
                     Icon(Icons.Default.Verified, contentDescription = null)
                     Spacer(modifier = Modifier.width(8.dp))
                     Text("Mark Blood Received / Fulfilled", fontWeight = FontWeight.Bold)
+                }
+            }
+
+            if (isOwner && (request.status == RequestStatus.PENDING || isDonorAssigned)) {
+                OutlinedButton(
+                    onClick = { showCancelConfirm = true },
+                    modifier = Modifier.fillMaxWidth().height(48.dp).testTag("btn_detail_cancel_request"),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Icon(Icons.Default.Cancel, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Cancel This Blood Request", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.SemiBold)
                 }
             }
         }

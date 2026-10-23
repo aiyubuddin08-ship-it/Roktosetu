@@ -31,6 +31,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -71,8 +73,17 @@ fun ChatListScreen(
     val chatState by chatViewModel.uiState.collectAsState()
     val myProfile by authViewModel.currentUserProfile.collectAsState()
     val sdf = remember { SimpleDateFormat("hh:mm a", Locale.getDefault()) }
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    LaunchedEffect(chatState.errorMessage) {
+        chatState.errorMessage?.let { msg ->
+            snackbarHostState.showSnackbar(msg)
+            chatViewModel.clearError()
+        }
+    }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = {
@@ -208,12 +219,21 @@ fun ChatConversationScreen(
     val myProfile by authViewModel.currentUserProfile.collectAsState()
     var messageText by remember { mutableStateOf("") }
     val sdf = remember { SimpleDateFormat("hh:mm a", Locale.getDefault()) }
+    val snackbarHostState = remember { SnackbarHostState() }
 
     LaunchedEffect(conversationId) {
         chatViewModel.openConversation(conversationId)
     }
 
+    LaunchedEffect(chatState.errorMessage) {
+        chatState.errorMessage?.let { msg ->
+            snackbarHostState.showSnackbar(msg)
+            chatViewModel.clearError()
+        }
+    }
+
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = {

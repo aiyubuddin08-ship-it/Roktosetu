@@ -5,16 +5,22 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.data.firebase.Resource
 import com.example.data.repository.RoktoSetuRepository
+import com.example.data.repository.RoktoSetuRepository.Companion.toBloodRequest
+import com.example.data.repository.RoktoSetuRepository.Companion.toPublicDonorView
 import com.example.domain.BloodCompatibilityHelper
+import com.example.domain.LocationHelper
 import com.example.model.BloodGroup
 import com.example.model.BloodRequest
 import com.example.model.DonationRecord
+import com.example.model.DonorAvailability
 import com.example.model.PublicDonorView
 import com.example.model.RequestStatus
 import com.example.model.RequestUrgency
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
 
 data class BloodUiState(
@@ -22,12 +28,15 @@ data class BloodUiState(
     val donors: List<PublicDonorView> = emptyList(),
     val myDonations: List<DonationRecord> = emptyList(),
     val selectedBloodGroupFilter: BloodGroup? = null,
-    val selectedCityFilter: String = "",
+    val includeCompatibleDonors: Boolean = true,
+    val onlyAvailableDonors: Boolean = false,
+    val selectedDivision: String = "",
+    val selectedDistrict: String = "",
+    val selectedUpazila: String = "",
+    val areaSearchQuery: String = "",
     val isLoading: Boolean = false,
     val errorMessage: String? = null,
-    val successMessage: String? = null,
-    val userLat: Double = 23.8103, // Default Dhaka coordinates for demonstration
-    val userLon: Double = 90.4125
+    val successMessage: String? = null
 )
 
 class BloodViewModel(
@@ -37,15 +46,18 @@ class BloodViewModel(
     private val _uiState = MutableStateFlow(BloodUiState())
     val uiState: StateFlow<BloodUiState> = _uiState.asStateFlow()
 
-    init {
-        loadRequests()
-        loadDonors()
-        loadMyDonations()
-    }
+    private var requestsJob: Job? = null
+    private var donorsJob: Job? = null
+    private var donationsJob: Job? = null
 
-    fun setLocation(lat: Double, lon: Double) {
-        _uiState.value = _uiState.value.copy(userLat = lat, userLon = lon)
-        loadDonors()
+    init {
+        viewModelScope.launch {
+            repository.currentUserProfile.collect {
+                loadRequests()
+                loadDonors()
+                loadMyDonations()
+            }
+        }
     }
 
     fun setBloodGroupFilter(bloodGroup: BloodGroup?) {
@@ -54,39 +66,164 @@ class BloodViewModel(
         loadDonors()
     }
 
-    fun setCityFilter(city: String) {
-        _uiState.value = _uiState.value.copy(selectedCityFilter = city)
+    fun setIncludeCompatibleDonors(includeCompatible: Boolean) {
+        _uiState.value = _uiState.value.copy(includeCompatibleDonors = includeCompatible)
         loadDonors()
     }
 
+    fun setOnlyAvailableDonors(onlyAvailable: Boolean) {
+        _uiState.value = _uiState.value.copy(onlyAvailableDonors = onlyAvailable)
+        loadDonors()
+    }
+
+    fun setDivisionFilter(division: String) {
+        val nextDivision = if (division == "All") "" else division
+        _uiState.value = _uiState.value.copy(
+            selectedDivision = nextDivision,
+            selectedDistrict = "",
+            selectedUpazila = ""
+        )
+        loadRequests()
+        loadDonors()
+    }
+
+    fun setDistrictFilter(district: String) {
+        val nextDistrict = if (district == "All") "" else district
+        _uiState.value = _uiState.value.copy(
+            selectedDistrict = nextDistrict,
+            selectedUpazila = ""
+        )
+        loadRequests()
+        loadDonors()
+    }
+
+    fun setUpazilaFilter(upazila: String) {
+        val nextUpazila = if (upazila == "All") "" else upazila
+        _uiState.value = _uiState.value.copy(selectedUpazila = nextUpazila)
+        loadRequests()
+        loadDonors()
+    }
+
+    fun setAreaSearchQuery(area: String) {
+        _uiState.value = _uiState.value.copy(areaSearchQuery = area)
+        loadRequests()
+        loadDonors()
+    }
+
+    fun clearFilters() {
+        _uiState.value = _uiState.value.copy(
+            selectedBloodGroupFilter = null,
+            includeCompatibleDonors = true,
+            onlyAvailableDonors = false,
+            selectedDivision = "",
+            selectedDistrict = "",
+            selectedUpazila = "",
+            areaSearchQuery = ""
+        )
+        loadRequests()
+        loadDonors()
+    }
+
+    fun retryLoad() {
+        _uiState.value = _uiState.value.copy(errorMessage = null)
+        loadRequests()
+        loadDonors()
+        loadMyDonations()
+    }
+
     fun loadRequests() {
-        viewModelScope.launch {
+        requestsJob?.cancel()
+        requestsJob = viewModelScope.launch {
+            val state = _uiState.value
             repository.getBloodRequests(
-                filterBloodGroup = _uiState.value.selectedBloodGroupFilter
+                filterBloodGroup = state.selectedBloodGroupFilter,
+                divisionFilter = state.selectedDivision.ifBlank { null },
+                districtFilter = state.selectedDistrict.ifBlank { null },
+                upazilaFilter = state.selectedUpazila.ifBlank { null },
+                areaQuery = state.areaSearchQuery.ifBlank { null },
+                onError = { msg ->
+                    _uiState.value = _uiState.value.copy(errorMessage = msg)
+                }
             ).collect { list ->
-                _uiState.value = _uiState.value.copy(requests = list)
+                if (list.isNotEmpty()) {
+                    _uiState.value = _uiState.value.copy(requests = list)
+                    repository.cacheRequestsLocally(list)
+                } else {
+                    val cached = repository.getCachedRequests()?.firstOrNull()?.map { it.toBloodRequest() }.orEmpty()
+                    val filteredCached = cached.filter { req ->
+                        (state.selectedBloodGroupFilter == null || req.bloodGroup == state.selectedBloodGroupFilter) &&
+                            LocationHelper.matchesLocationFilter(
+                                itemDivision = req.division,
+                                itemDistrict = req.district.ifBlank { req.city },
+                                itemUpazila = req.upazila,
+                                itemArea = "${req.area} ${req.hospitalName} ${req.hospitalAddress}",
+                                filterDivision = state.selectedDivision,
+                                filterDistrict = state.selectedDistrict,
+                                filterUpazila = state.selectedUpazila,
+                                filterAreaQuery = state.areaSearchQuery
+                            )
+                    }
+                    _uiState.value = _uiState.value.copy(
+                        requests = if (!repository.isAuthenticated && filteredCached.isNotEmpty()) filteredCached else list
+                    )
+                }
             }
         }
     }
 
     fun loadDonors() {
-        viewModelScope.launch {
+        donorsJob?.cancel()
+        donorsJob = viewModelScope.launch {
+            val state = _uiState.value
             repository.getDonors(
-                filterBloodGroup = _uiState.value.selectedBloodGroupFilter,
-                cityFilter = _uiState.value.selectedCityFilter.ifBlank { null },
-                userLat = _uiState.value.userLat,
-                userLon = _uiState.value.userLon
+                filterBloodGroup = state.selectedBloodGroupFilter,
+                includeCompatible = state.includeCompatibleDonors,
+                divisionFilter = state.selectedDivision.ifBlank { null },
+                districtFilter = state.selectedDistrict.ifBlank { null },
+                upazilaFilter = state.selectedUpazila.ifBlank { null },
+                areaFilter = state.areaSearchQuery.ifBlank { null },
+                onlyAvailable = state.onlyAvailableDonors,
+                onError = { msg ->
+                    _uiState.value = _uiState.value.copy(errorMessage = msg)
+                }
             ).collect { list ->
-                _uiState.value = _uiState.value.copy(donors = list)
-                repository.cacheDonorsLocally(list)
+                if (list.isNotEmpty()) {
+                    _uiState.value = _uiState.value.copy(donors = list)
+                    repository.cacheDonorsLocally(list)
+                } else {
+                    val cached = repository.getCachedDonors()?.firstOrNull()?.map { it.toPublicDonorView() }.orEmpty()
+                    val filteredCached = cached.filter { donor ->
+                        (state.selectedBloodGroupFilter == null || donor.bloodGroup == state.selectedBloodGroupFilter) &&
+                            (!state.onlyAvailableDonors || donor.availability == DonorAvailability.AVAILABLE) &&
+                            LocationHelper.matchesLocationFilter(
+                                itemDivision = donor.division,
+                                itemDistrict = donor.district.ifBlank { donor.city },
+                                itemUpazila = donor.upazila,
+                                itemArea = donor.area.ifBlank { donor.generalLocation },
+                                filterDivision = state.selectedDivision,
+                                filterDistrict = state.selectedDistrict,
+                                filterUpazila = state.selectedUpazila,
+                                filterAreaQuery = state.areaSearchQuery
+                            )
+                    }
+                    _uiState.value = _uiState.value.copy(
+                        donors = if (!repository.isAuthenticated && filteredCached.isNotEmpty()) filteredCached else list
+                    )
+                }
             }
         }
     }
 
     fun loadMyDonations() {
-        viewModelScope.launch {
+        donationsJob?.cancel()
+        donationsJob = viewModelScope.launch {
             val uid = repository.currentUserId ?: return@launch
-            repository.getUserDonations(uid).collect { donations ->
+            repository.getUserDonations(
+                donorUid = uid,
+                onError = { msg ->
+                    _uiState.value = _uiState.value.copy(errorMessage = msg)
+                }
+            ).collect { donations ->
                 _uiState.value = _uiState.value.copy(myDonations = donations)
             }
         }
@@ -99,7 +236,11 @@ class BloodViewModel(
         unitsRequired: Int,
         hospitalName: String,
         hospitalAddress: String,
-        city: String,
+        division: String = "Dhaka",
+        district: String = "Dhaka",
+        upazila: String = "",
+        city: String = district,
+        area: String = hospitalAddress,
         urgency: RequestUrgency,
         contactPhone: String,
         medicalReason: String,
@@ -110,20 +251,36 @@ class BloodViewModel(
             _uiState.value = _uiState.value.copy(errorMessage = "Please enter patient name, hospital, and contact number")
             return
         }
+        if (unitsRequired !in 1..20) {
+            _uiState.value = _uiState.value.copy(errorMessage = "Units required must be between 1 and 20 bags")
+            return
+        }
+
+        val uid = repository.currentUserId
+        if (uid.isNullOrBlank()) {
+            _uiState.value = _uiState.value.copy(errorMessage = "You must be signed in to post a blood request")
+            return
+        }
 
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isLoading = true, errorMessage = null)
             val profile = repository.currentUserProfile.value
+            val resolvedDistrict = district.trim().ifEmpty { city.trim().ifEmpty { "Dhaka" } }
+            val resolvedDivision = division.trim().ifEmpty { "Dhaka" }
             val request = BloodRequest(
-                requesterUid = repository.currentUserId ?: "anon",
-                requesterName = profile?.name ?: "Blood Requester",
+                requesterUid = uid,
+                requesterName = profile?.name ?: "Verified User",
                 patientName = patientName.trim(),
-                patientAge = patientAge,
+                patientAge = patientAge.coerceIn(0, 120),
                 bloodGroup = bloodGroup,
                 unitsRequired = unitsRequired,
                 hospitalName = hospitalName.trim(),
                 hospitalAddress = hospitalAddress.trim(),
-                city = city.trim().ifEmpty { "Dhaka" },
+                division = resolvedDivision,
+                district = resolvedDistrict,
+                upazila = upazila.trim(),
+                area = area.trim().ifEmpty { hospitalAddress.trim() },
+                city = resolvedDistrict,
                 urgency = urgency,
                 contactPhone = contactPhone.trim(),
                 medicalReason = medicalReason.trim(),
@@ -134,7 +291,7 @@ class BloodViewModel(
                 is Resource.Success -> {
                     _uiState.value = _uiState.value.copy(
                         isLoading = false,
-                        successMessage = "Blood request posted! Compatible donors in the area are notified."
+                        successMessage = "Blood request posted! Compatible donors in $resolvedDistrict have been notified."
                     )
                     onSuccess(res.data)
                 }
@@ -147,10 +304,14 @@ class BloodViewModel(
     }
 
     fun acceptRequest(requestId: String, onSuccess: () -> Unit) {
-        val user = repository.currentUserProfile.value ?: return
+        val user = repository.currentUserProfile.value
+        if (user == null) {
+            _uiState.value = _uiState.value.copy(errorMessage = "Please sign in and complete your profile to accept blood requests.")
+            return
+        }
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isLoading = true, errorMessage = null)
-            when (val res = repository.acceptBloodRequest(requestId, user.uid, user.name)) {
+            when (val res = repository.acceptBloodRequest(requestId, user.uid, user.name, user.bloodGroup)) {
                 is Resource.Success -> {
                     _uiState.value = _uiState.value.copy(
                         isLoading = false,
@@ -184,9 +345,38 @@ class BloodViewModel(
         }
     }
 
-    fun getCompatibleDonorsForRecipient(recipientBlood: BloodGroup): List<PublicDonorView> {
-        val compatibleGroups = BloodCompatibilityHelper.getCompatibleDonorGroups(recipientBlood)
-        return _uiState.value.donors.filter { compatibleGroups.contains(it.bloodGroup) }
+    fun getCompatibleDonorsForRecipient(
+        recipientBlood: BloodGroup,
+        includeCompatibleAlternatives: Boolean = true,
+        divisionFilter: String? = null,
+        districtFilter: String? = null,
+        upazilaFilter: String? = null,
+        areaQuery: String? = null
+    ): List<PublicDonorView> {
+        val compatibleGroups = if (includeCompatibleAlternatives) {
+            BloodCompatibilityHelper.getCompatibleDonorGroups(recipientBlood)
+        } else {
+            listOf(recipientBlood)
+        }
+        return _uiState.value.donors
+            .filter { donor ->
+                compatibleGroups.contains(donor.bloodGroup) &&
+                        donor.availability != DonorAvailability.UNAVAILABLE &&
+                        LocationHelper.matchesLocationFilter(
+                            itemDivision = donor.division,
+                            itemDistrict = donor.district.ifBlank { donor.city },
+                            itemUpazila = donor.upazila,
+                            itemArea = donor.area.ifBlank { donor.generalLocation },
+                            filterDivision = divisionFilter,
+                            filterDistrict = districtFilter,
+                            filterUpazila = upazilaFilter,
+                            filterAreaQuery = areaQuery
+                        )
+            }
+            .sortedWith(
+                compareBy<PublicDonorView> { it.bloodGroup != recipientBlood } // Exact match first
+                    .thenBy { it.availability != DonorAvailability.AVAILABLE }
+            )
     }
 
     fun clearMessages() {

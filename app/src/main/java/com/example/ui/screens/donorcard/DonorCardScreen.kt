@@ -1,8 +1,19 @@
 package com.example.ui.screens.donorcard
 
+import android.content.ContentValues
+import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.Canvas as AndroidCanvas
+import android.graphics.LinearGradient
+import android.graphics.Paint
+import android.graphics.RectF
+import android.graphics.Shader
+import android.graphics.Typeface
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import android.widget.Toast
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -17,7 +28,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -32,7 +42,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.Divider
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -53,13 +62,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -93,8 +99,9 @@ fun DonorCardScreen(
     val bloodGroup = currentUserProfile?.bloodGroup ?: BloodGroup.O_POSITIVE
     val donorId = currentUserProfile?.uid?.take(8)?.uppercase() ?: "RS-DONOR-01"
     val city = currentUserProfile?.location?.city?.ifBlank { null } ?: "Dhaka"
-    val totalDonations = currentUserProfile?.donationCount ?: 1
-    val isVerified = currentUserProfile?.verificationStatus == VerificationStatus.VERIFIED
+    val totalDonations = currentUserProfile?.donationCount ?: 0
+    val verificationStatus = currentUserProfile?.verificationStatus ?: VerificationStatus.UNVERIFIED
+    val isVerified = verificationStatus == VerificationStatus.VERIFIED
 
     Scaffold(
         topBar = {
@@ -304,7 +311,13 @@ fun DonorCardScreen(
                                 }
                                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                     Text("Status", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    Text("Certified", fontWeight = FontWeight.Bold, color = BloodSuccessGreen)
+                                    val statusLabel = when (verificationStatus) {
+                                        VerificationStatus.VERIFIED -> if (isBangla) "যাচাইকৃত (Verified)" else "Verified"
+                                        VerificationStatus.PENDING -> if (isBangla) "বিবেচনাধীন (Pending)" else "Pending Review"
+                                        else -> if (isBangla) "অযাচাইকৃত (Unverified)" else "Unverified"
+                                    }
+                                    val statusColor = if (isVerified) BloodSuccessGreen else MaterialTheme.colorScheme.onSurfaceVariant
+                                    Text(statusLabel, fontWeight = FontWeight.Bold, color = statusColor)
                                 }
                             }
                         }
@@ -323,7 +336,7 @@ fun DonorCardScreen(
                                 putExtra(Intent.EXTRA_SUBJECT, "RoktoSetu Digital Donor ID")
                                 putExtra(
                                     Intent.EXTRA_TEXT,
-                                    "I am a proud voluntary blood donor at LifeLink Blood Connect!\nName: $name\nBlood Group: ${bloodGroup.display}\nDonor ID: $donorId\nJoin us and save lives: https://roktosetu.app"
+                                    "I am a voluntary blood donor at RoktoSetu (রক্তসেতু)!\nName: $name\nBlood Group: ${bloodGroup.display}\nDonor ID: $donorId\nDonations: $totalDonations"
                                 )
                             }
                             context.startActivity(Intent.createChooser(shareIntent, "Share Donor Card"))
@@ -339,9 +352,25 @@ fun DonorCardScreen(
 
                     OutlinedButton(
                         onClick = {
-                            Toast.makeText(context, if (isBangla) "ডিজিটাল কার্ড ডিভাইসে সংরক্ষণ করা হয়েছে!" else "Donor card saved to device!", Toast.LENGTH_SHORT).show()
+                            val saved = saveDonorCardBitmapToGallery(
+                                context = context,
+                                name = name,
+                                bloodGroup = bloodGroup.display,
+                                donorId = donorId,
+                                city = city,
+                                totalDonations = totalDonations,
+                                isVerified = isVerified
+                            )
+                            val msg = if (saved) {
+                                if (isBangla) "ডোনার কার্ড ছবি হিসেবে গ্যালারিতে সংরক্ষিত হয়েছে!"
+                                else "Donor card PNG saved to Pictures/RoktoSetu!"
+                            } else {
+                                if (isBangla) "ছবি সংরক্ষণ করা যায়নি। পুনরায় চেষ্টা করুন।"
+                                else "Could not save donor card image."
+                            }
+                            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
                         },
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.weight(1f).testTag("btn_save_donor_card"),
                         shape = RoundedCornerShape(12.dp)
                     ) {
                         Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -351,5 +380,108 @@ fun DonorCardScreen(
                 }
             }
         }
+    }
+}
+
+private fun saveDonorCardBitmapToGallery(
+    context: Context,
+    name: String,
+    bloodGroup: String,
+    donorId: String,
+    city: String,
+    totalDonations: Int,
+    isVerified: Boolean
+): Boolean {
+    return try {
+        val width = 1000
+        val height = 600
+        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        val canvas = AndroidCanvas(bitmap)
+
+        val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            shader = LinearGradient(
+                0f,
+                0f,
+                width.toFloat(),
+                height.toFloat(),
+                intArrayOf(0xFF7F0000.toInt(), 0xFFC62828.toInt(), 0xFF880E4F.toInt()),
+                null,
+                Shader.TileMode.CLAMP
+            )
+        }
+        canvas.drawRoundRect(RectF(0f, 0f, width.toFloat(), height.toFloat()), 44f, 44f, bgPaint)
+
+        val titlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = android.graphics.Color.WHITE
+            textSize = 42f
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+        }
+        canvas.drawText("ROKTOSETU • রক্তসেতু", 56f, 92f, titlePaint)
+
+        val subtitlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0xDDFFFFFF.toInt()
+            textSize = 26f
+        }
+        val badgeText = if (isVerified) "VERIFIED BLOOD DONOR" else "VOLUNTARY BLOOD DONOR"
+        canvas.drawText(badgeText, 56f, 134f, subtitlePaint)
+
+        val namePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = android.graphics.Color.WHITE
+            textSize = 54f
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+        }
+        canvas.drawText(name.take(28), 56f, 290f, namePaint)
+
+        val infoPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0xEEFFFFFF.toInt()
+            textSize = 32f
+        }
+        canvas.drawText("Donor ID: $donorId  •  City: $city", 56f, 350f, infoPaint)
+
+        val goldPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0xFFFFD54F.toInt()
+            textSize = 32f
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+        }
+        canvas.drawText("Total Donations: $totalDonations", 56f, 410f, goldPaint)
+
+        val badgeCirclePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = android.graphics.Color.WHITE
+        }
+        canvas.drawCircle(width - 150f, 300f, 90f, badgeCirclePaint)
+
+        val bloodTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0xFFB71C1C.toInt()
+            textSize = 58f
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+            textAlign = Paint.Align.CENTER
+        }
+        canvas.drawText(bloodGroup, width - 150f, 320f, bloodTextPaint)
+
+        val fileName = "RoktoSetu_Donor_${donorId}_${System.currentTimeMillis()}.png"
+        val resolver = context.contentResolver
+        val contentValues = ContentValues().apply {
+            put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
+            put(MediaStore.MediaColumns.MIME_TYPE, "image/png")
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                put(MediaStore.MediaColumns.RELATIVE_PATH, "${Environment.DIRECTORY_PICTURES}/RoktoSetu")
+                put(MediaStore.MediaColumns.IS_PENDING, 1)
+            }
+        }
+
+        val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues)
+            ?: return false
+        resolver.openOutputStream(uri)?.use { outStream ->
+            bitmap.compress(Bitmap.CompressFormat.PNG, 100, outStream)
+        } ?: return false
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            contentValues.clear()
+            contentValues.put(MediaStore.MediaColumns.IS_PENDING, 0)
+            resolver.update(uri, contentValues, null, null)
+        }
+        true
+    } catch (_: Exception) {
+        false
     }
 }

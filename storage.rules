@@ -2,33 +2,67 @@ rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
 
-    // Default Deny
+    // Default Deny Everything
     match /{allPaths=**} {
       allow read, write: if false;
     }
 
-    // Profile photos - Read by all authenticated users; Write by owner only (Max 5MB, Image MIME)
-    match /users/{userId}/{allPaths=**} {
-      allow read: if request.auth != null;
-      allow write: if request.auth != null && request.auth.uid == userId
-        && request.resource.size < 5 * 1024 * 1024
-        && request.resource.contentType.matches('image/.*');
+    function isSignedIn() {
+      return request.auth != null;
     }
 
-    // Verification documents - Strictly private: Read only by user & admin; Write by user
-    match /verifications/{userId}/{documentId} {
-      allow read: if request.auth != null && (request.auth.uid == userId || request.auth.token.admin == true);
-      allow write: if request.auth != null && request.auth.uid == userId
-        && request.resource.size < 10 * 1024 * 1024;
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
     }
 
-    // Organization assets
-    match /organizations/{orgId}/{fileName} {
-      allow read: if request.auth != null;
-      allow write: if request.auth != null && (
-        request.auth.token.admin == true ||
-        request.auth.token.orgId == orgId
+    function isAdmin() {
+      return isSignedIn() && (
+        ('admin' in request.auth.token && request.auth.token.admin == true) ||
+        firestore.exists(/databases/ai-studio-android-lifelink-32b78329-0908-44db-bbd3-9204072ef691/documents/admins/$(request.auth.uid))
       );
+    }
+
+    function isValidImageUpload(maxSizeBytes) {
+      return request.resource != null &&
+             request.resource.size > 0 &&
+             request.resource.size <= maxSizeBytes &&
+             request.resource.contentType.matches('image/(jpeg|png|webp)');
+    }
+
+    function isValidDocumentUpload(maxSizeBytes) {
+      return request.resource != null &&
+             request.resource.size > 0 &&
+             request.resource.size <= maxSizeBytes &&
+             (request.resource.contentType.matches('image/(jpeg|png|webp)') ||
+              request.resource.contentType == 'application/pdf');
+    }
+
+    // 1. User Profile Avatars: Read by authenticated users; Write/Delete only by owner (Max 5MB image)
+    match /users/{userId}/{fileName} {
+      allow read: if isSignedIn() && fileName.matches('^[a-zA-Z0-9_\\-\\.]+$');
+      allow create, update: if isOwner(userId) &&
+                               fileName.matches('^profile\\.(jpg|jpeg|png|webp)$') &&
+                               isValidImageUpload(5 * 1024 * 1024);
+      allow delete: if isOwner(userId) || isAdmin();
+    }
+
+    // 2. Verification Evidence Documents: Strictly private to owner and admins (Max 10MB image/PDF)
+    match /verifications/{userId}/{documentId} {
+      allow read: if (isOwner(userId) || isAdmin()) && documentId.matches('^[a-zA-Z0-9_\\-\\.]+$');
+      allow create, update: if isOwner(userId) &&
+                               documentId.matches('^[a-zA-Z0-9_\\-\\.]+$') &&
+                               isValidDocumentUpload(10 * 1024 * 1024);
+      allow delete: if isAdmin();
+    }
+
+    // 3. Organization Logos & Verification Certificates
+    match /organizations/{orgId}/{fileName} {
+      allow read: if isSignedIn() && fileName.matches('^[a-zA-Z0-9_\\-\\.]+$');
+      allow create, update: if isSignedIn() &&
+                               fileName.matches('^[a-zA-Z0-9_\\-\\.]+$') &&
+                               (isAdmin() || ('orgId' in request.auth.token && request.auth.token.orgId == orgId)) &&
+                               isValidDocumentUpload(5 * 1024 * 1024);
+      allow delete: if isAdmin();
     }
   }
 }

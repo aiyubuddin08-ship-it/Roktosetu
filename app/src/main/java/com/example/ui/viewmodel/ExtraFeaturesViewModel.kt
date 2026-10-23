@@ -1,14 +1,19 @@
 package com.example.ui.viewmodel
 
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.example.data.firebase.Resource
+import com.example.data.repository.RoktoSetuRepository
 import com.example.model.AmbulanceService
 import com.example.model.AppLanguage
 import com.example.model.BloodBank
 import com.example.model.BloodDonationCamp
 import com.example.model.BloodGroup
+import com.example.model.Campaign
 import com.example.model.DonationEligibility
 import com.example.model.UserProfile
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -29,13 +34,51 @@ data class ExtraFeaturesUiState(
     val statusMessage: String? = null
 )
 
-class ExtraFeaturesViewModel : ViewModel() {
+class ExtraFeaturesViewModel(
+    private val repository: RoktoSetuRepository? = null
+) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ExtraFeaturesUiState())
     val uiState: StateFlow<ExtraFeaturesUiState> = _uiState.asStateFlow()
 
+    private var campaignsJob: Job? = null
+    private var defaultReferenceCamps: List<BloodDonationCamp> = emptyList()
+
     init {
         loadInitialData()
+        observeRemoteCampaigns()
+    }
+
+    private fun observeRemoteCampaigns() {
+        val repo = repository ?: return
+        viewModelScope.launch {
+            repo.currentUserProfile.collect {
+                campaignsJob?.cancel()
+                campaignsJob = viewModelScope.launch {
+                    repo.getCampaigns().collect { remoteCampaigns ->
+                        val sdf = SimpleDateFormat("dd MMM yyyy", Locale.getDefault())
+                        val mappedRemote = remoteCampaigns.map { c ->
+                            BloodDonationCamp(
+                                id = c.id,
+                                title = c.title,
+                                titleBn = c.title,
+                                organizer = c.organizationName.ifBlank { "Community Blood Drive" },
+                                location = if (c.city.isNotBlank()) "${c.location}, ${c.city}" else c.location,
+                                date = if (c.startDate > 0L) sdf.format(Date(c.startDate)) else "Upcoming",
+                                time = "09:00 AM - 05:00 PM",
+                                contactPhone = c.contactPhone,
+                                targetUnits = c.targetBags,
+                                registeredCount = c.collectedBags,
+                                description = c.description
+                            )
+                        }
+                        val remoteIds = mappedRemote.map { it.id }.toSet()
+                        val merged = mappedRemote + defaultReferenceCamps.filterNot { it.id in remoteIds }
+                        _uiState.update { it.copy(camps = merged) }
+                    }
+                }
+            }
+        }
     }
 
     private fun loadInitialData() {
@@ -221,6 +264,7 @@ class ExtraFeaturesViewModel : ViewModel() {
             )
         )
 
+        defaultReferenceCamps = initialCamps
         _uiState.update {
             it.copy(
                 bloodBanks = initialBloodBanks,
@@ -268,8 +312,9 @@ class ExtraFeaturesViewModel : ViewModel() {
         targetUnits: Int,
         description: String
     ) {
+        val campId = "camp_${System.currentTimeMillis()}"
         val newCamp = BloodDonationCamp(
-            id = "camp-${System.currentTimeMillis()}",
+            id = campId,
             title = titleBn,
             titleBn = titleBn,
             organizer = organizer,
@@ -282,11 +327,36 @@ class ExtraFeaturesViewModel : ViewModel() {
             isUserRsvp = true,
             description = description
         )
+        defaultReferenceCamps = listOf(newCamp) + defaultReferenceCamps
         _uiState.update { current ->
             current.copy(
                 camps = listOf(newCamp) + current.camps,
                 statusMessage = if (current.language == AppLanguage.BANGLA) "নতুন রক্তদান ক্যাম্প সফলভাবে যোগ করা হয়েছে!" else "New Blood Camp published successfully!"
             )
+        }
+        val repo = repository ?: return
+        viewModelScope.launch {
+            val profile = repo.currentUserProfile.value
+            val orgId = profile?.organizationId ?: repo.currentUserId ?: ""
+            if (orgId.isNotBlank()) {
+                repo.createCampaign(
+                    Campaign(
+                        id = campId,
+                        organizationId = orgId,
+                        organizationName = organizer,
+                        title = titleBn,
+                        description = description,
+                        location = location,
+                        city = profile?.location?.district ?: "Dhaka",
+                        startDate = System.currentTimeMillis(),
+                        endDate = System.currentTimeMillis() + 7 * 86400000L,
+                        targetBags = targetUnits.coerceAtLeast(1),
+                        collectedBags = 1,
+                        contactPhone = phone,
+                        isActive = true
+                    )
+                )
+            }
         }
     }
 
@@ -352,5 +422,17 @@ class ExtraFeaturesViewModel : ViewModel() {
                 "Hospital: $hospital, $city\n" +
                 "Emergency Contact: $contact\n" +
                 "Sent via RoktoSetu App. Please call immediately if you or someone you know can donate!"
+    }
+}
+
+class ExtraFeaturesViewModelFactory(
+    private val repository: RoktoSetuRepository
+) : ViewModelProvider.Factory {
+    override fun <T : ViewModel> create(modelClass: Class<T>): T {
+        if (modelClass.isAssignableFrom(ExtraFeaturesViewModel::class.java)) {
+            @Suppress("UNCHECKED_CAST")
+            return ExtraFeaturesViewModel(repository) as T
+        }
+        throw IllegalArgumentException("Unknown ViewModel class")
     }
 }

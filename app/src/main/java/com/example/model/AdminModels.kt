@@ -36,6 +36,7 @@ data class SystemMetrics(
 data class VerificationTask(
     val id: String = "",
     val targetId: String = "",
+    val applicantUid: String = targetId,
     val type: String = "DONOR", // "DONOR", "ORGANIZATION", "DONATION_RECORD"
     val name: String = "",
     val bloodGroup: BloodGroup? = null,

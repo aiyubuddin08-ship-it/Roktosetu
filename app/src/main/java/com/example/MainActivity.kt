@@ -6,6 +6,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.navigation.compose.rememberNavController
+import com.example.data.firebase.FirebaseSecurityHelper
 import com.example.data.repository.RoktoSetuRepository
 import com.example.ui.navigation.AppNavigation
 import com.example.ui.theme.RoktoSetuTheme
@@ -18,6 +19,7 @@ import com.example.ui.viewmodel.BloodViewModelFactory
 import com.example.ui.viewmodel.ChatViewModel
 import com.example.ui.viewmodel.ChatViewModelFactory
 import com.example.ui.viewmodel.ExtraFeaturesViewModel
+import com.example.ui.viewmodel.ExtraFeaturesViewModelFactory
 import com.example.ui.viewmodel.OrgViewModelFactory
 import com.example.ui.viewmodel.OrganizationViewModel
 
@@ -30,10 +32,11 @@ class MainActivity : ComponentActivity() {
     private val chatViewModel: ChatViewModel by viewModels { ChatViewModelFactory(repository) }
     private val orgViewModel: OrganizationViewModel by viewModels { OrgViewModelFactory(repository) }
     private val adminViewModel: AdminViewModel by viewModels { AdminViewModelFactory(repository) }
-    private val extraViewModel: ExtraFeaturesViewModel by viewModels()
+    private val extraViewModel: ExtraFeaturesViewModel by viewModels { ExtraFeaturesViewModelFactory(repository) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        FirebaseSecurityHelper.initializeAppCheckAndChannels(applicationContext)
         enableEdgeToEdge()
         setContent {
             RoktoSetuTheme {

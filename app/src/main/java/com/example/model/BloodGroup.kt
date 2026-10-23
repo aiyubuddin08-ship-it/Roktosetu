@@ -54,5 +54,9 @@ enum class BloodGroup(val display: String, val bengaliDisplay: String) {
                 it.name == normalized || it.display.equals(value.trim(), ignoreCase = true)
             }
         }
+
+        fun fromDisplay(value: String?): BloodGroup {
+            return fromString(value) ?: O_POSITIVE
+        }
     }
 }

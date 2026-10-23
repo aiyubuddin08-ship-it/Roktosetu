@@ -1,5 +1,9 @@
 package com.example
 
+import com.example.base.FirestoreEmulatorTestBase
+import com.example.data.firebase.FirebaseAuthService
+import com.example.data.firebase.FirestoreService
+import com.example.data.repository.RoktoSetuRepository
 import com.example.model.AuthState
 import com.example.model.BloodGroup
 import com.example.model.DonorAvailability
@@ -7,11 +11,14 @@ import com.example.model.LocationInfo
 import com.example.model.UserProfile
 import com.example.model.UserRole
 import com.example.model.VerificationStatus
+import com.example.ui.viewmodel.AuthViewModel
+import com.google.firebase.auth.FirebaseAuthRecentLoginRequiredException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -19,37 +26,27 @@ import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36])
-class AuthUnitTest {
+class AuthUnitTest : FirestoreEmulatorTestBase() {
 
-    // Helper for password validation logic
-    private fun validatePassword(pass: String): String? {
-        if (pass.length < 8) return "Password must be at least 8 characters"
-        if (!pass.any { it.isUpperCase() }) return "Password must contain at least one uppercase letter"
-        if (!pass.any { it.isLowerCase() }) return "Password must contain at least one lowercase letter"
-        if (!pass.any { it.isDigit() }) return "Password must contain at least one number"
-        return null
-    }
+    private lateinit var authService: FirebaseAuthService
+    private lateinit var repository: RoktoSetuRepository
+    private lateinit var authViewModel: AuthViewModel
 
-    private fun validateRegistration(
-        name: String,
-        email: String,
-        pass: String,
-        confirmPass: String,
-        phone: String,
-        termsAccepted: Boolean
-    ): Boolean {
-        if (name.trim().length < 2) return false
-        if (!android.util.Patterns.EMAIL_ADDRESS.matcher(email.trim()).matches()) return false
-        if (phone.trim().length < 8) return false
-        if (validatePassword(pass) != null) return false
-        if (pass != confirmPass) return false
-        if (!termsAccepted) return false
-        return true
+    @Before
+    override fun setUp() {
+        super.setUp()
+        authService = FirebaseAuthService(auth = auth, firestore = firestore, prefs = null)
+        repository = RoktoSetuRepository(
+            authService = authService,
+            firestoreService = FirestoreService(firestore),
+            localDb = null
+        )
+        authViewModel = AuthViewModel(repository)
     }
 
     @Test
-    fun `test valid registration inputs pass validation`() {
-        val result = validateRegistration(
+    fun `test real AuthViewModel validateRegistrationInput passes valid inputs`() {
+        val result = authViewModel.validateRegistrationInput(
             name = "Tanvir Ahmed",
             email = "tanvir@example.com",
             pass = "StrongPass123",
@@ -57,30 +54,72 @@ class AuthUnitTest {
             phone = "01712345678",
             termsAccepted = true
         )
-        assertTrue(result)
+        assertTrue(result.isValid)
+        assertNull(result.nameError)
+        assertNull(result.emailError)
+        assertNull(result.phoneError)
+        assertNull(result.passwordError)
+        assertNull(result.confirmPasswordError)
+        assertNull(result.termsError)
     }
 
     @Test
-    fun `test password rules enforcement`() {
-        // Short password
-        assertEquals("Password must be at least 8 characters", validatePassword("Pass1"))
+    fun `test real FirebaseAuthService and AuthViewModel password policy alignment`() {
+        // Short password (< 8 chars)
+        val shortResult = authViewModel.validateRegistrationInput(
+            name = "Tanvir Ahmed",
+            email = "tanvir@example.com",
+            pass = "Pass1",
+            confirmPass = "Pass1",
+            phone = "01712345678",
+            termsAccepted = true
+        )
+        assertFalse(shortResult.isValid)
+        assertEquals(FirebaseAuthService.validatePasswordRules("Pass1"), shortResult.passwordError)
 
         // No uppercase
-        assertEquals("Password must contain at least one uppercase letter", validatePassword("pass12345"))
+        val noUpperResult = authViewModel.validateRegistrationInput(
+            name = "Tanvir Ahmed",
+            email = "tanvir@example.com",
+            pass = "pass12345",
+            confirmPass = "pass12345",
+            phone = "01712345678",
+            termsAccepted = true
+        )
+        assertFalse(noUpperResult.isValid)
+        assertEquals(FirebaseAuthService.validatePasswordRules("pass12345"), noUpperResult.passwordError)
 
         // No lowercase
-        assertEquals("Password must contain at least one lowercase letter", validatePassword("PASS12345"))
+        val noLowerResult = authViewModel.validateRegistrationInput(
+            name = "Tanvir Ahmed",
+            email = "tanvir@example.com",
+            pass = "PASS12345",
+            confirmPass = "PASS12345",
+            phone = "01712345678",
+            termsAccepted = true
+        )
+        assertFalse(noLowerResult.isValid)
+        assertEquals(FirebaseAuthService.validatePasswordRules("PASS12345"), noLowerResult.passwordError)
 
         // No number
-        assertEquals("Password must contain at least one number", validatePassword("PasswordOnly"))
+        val noDigitResult = authViewModel.validateRegistrationInput(
+            name = "Tanvir Ahmed",
+            email = "tanvir@example.com",
+            pass = "PasswordOnly",
+            confirmPass = "PasswordOnly",
+            phone = "01712345678",
+            termsAccepted = true
+        )
+        assertFalse(noDigitResult.isValid)
+        assertEquals(FirebaseAuthService.validatePasswordRules("PasswordOnly"), noDigitResult.passwordError)
 
         // Valid password
-        assertNull(validatePassword("SecurePass2026"))
+        assertNull(FirebaseAuthService.validatePasswordRules("SecurePass2026"))
     }
 
     @Test
-    fun `test password mismatch fails validation`() {
-        val result = validateRegistration(
+    fun `test real AuthViewModel password mismatch fails validation`() {
+        val result = authViewModel.validateRegistrationInput(
             name = "Tanvir Ahmed",
             email = "tanvir@example.com",
             pass = "StrongPass123",
@@ -88,12 +127,13 @@ class AuthUnitTest {
             phone = "01712345678",
             termsAccepted = true
         )
-        assertFalse(result)
+        assertFalse(result.isValid)
+        assertEquals("Passwords do not match", result.confirmPasswordError)
     }
 
     @Test
-    fun `test invalid email fails validation`() {
-        val result = validateRegistration(
+    fun `test real AuthViewModel invalid email fails validation`() {
+        val result = authViewModel.validateRegistrationInput(
             name = "Tanvir Ahmed",
             email = "invalid-email-address",
             pass = "StrongPass123",
@@ -101,12 +141,13 @@ class AuthUnitTest {
             phone = "01712345678",
             termsAccepted = true
         )
-        assertFalse(result)
+        assertFalse(result.isValid)
+        assertNotNull(result.emailError)
     }
 
     @Test
-    fun `test unaccepted terms fails validation`() {
-        val result = validateRegistration(
+    fun `test real AuthViewModel unaccepted terms fails validation`() {
+        val result = authViewModel.validateRegistrationInput(
             name = "Tanvir Ahmed",
             email = "tanvir@example.com",
             pass = "StrongPass123",
@@ -114,7 +155,16 @@ class AuthUnitTest {
             phone = "01712345678",
             termsAccepted = false
         )
-        assertFalse(result)
+        assertFalse(result.isValid)
+        assertNotNull(result.termsError)
+    }
+
+    @Test
+    fun `test FirebaseAuthService session relies strictly on FirebaseAuth currentUser`() {
+        authService.signOut()
+        assertNull(authService.currentUserId)
+        assertFalse(authService.isAuthenticated)
+        assertEquals(AuthState.Unauthenticated, authService.authState.value)
     }
 
     @Test
@@ -127,7 +177,6 @@ class AuthUnitTest {
         assertTrue(profileNewDonor.isEligibleToDonate())
         assertEquals(0L, profileNewDonor.daysUntilNextEligible())
 
-        // Donated 100 days ago -> eligible
         val hundredDaysAgo = System.currentTimeMillis() - (100L * 24L * 60L * 60L * 1000L)
         val profileOldDonor = UserProfile(
             uid = "user_456",
@@ -136,7 +185,6 @@ class AuthUnitTest {
         )
         assertTrue(profileOldDonor.isEligibleToDonate())
 
-        // Donated 30 days ago -> resting (not eligible)
         val thirtyDaysAgo = System.currentTimeMillis() - (30L * 24L * 60L * 60L * 1000L)
         val profileResting = UserProfile(
             uid = "user_789",
@@ -158,13 +206,13 @@ class AuthUnitTest {
             donorAvailability = DonorAvailability.AVAILABLE,
             isEmergencyDonor = true,
             contactPhone = "01811223344",
-            showPhonePublicly = false, // User hid phone from public
+            showPhonePublicly = false,
             location = LocationInfo(
-                city = "Dhaka",
+                division = "Dhaka",
                 district = "Dhaka",
-                area = "Dhanmondi",
-                latitude = 23.7465,
-                longitude = 90.3760
+                upazila = "Dhanmondi",
+                city = "Dhaka",
+                area = "Dhanmondi"
             ),
             verificationStatus = VerificationStatus.VERIFIED,
             role = UserRole.USER,
@@ -178,21 +226,22 @@ class AuthUnitTest {
         assertEquals(BloodGroup.A_POSITIVE, publicView.bloodGroup)
         assertEquals(5, publicView.donationCount)
         assertEquals(VerificationStatus.VERIFIED, publicView.verificationStatus)
-        // Phone must be stripped because showPhonePublicly is false
         assertEquals("", publicView.contactPhone)
     }
 
     @Test
-    fun `test AuthState sealed interface instances`() {
-        val states: List<AuthState> = listOf(
-            AuthState.Loading,
-            AuthState.Unauthenticated,
-            AuthState.Authenticated,
-            AuthState.EmailVerificationRequired,
-            AuthState.ProfileCompletionRequired,
-            AuthState.AccountDisabled,
-            AuthState.Error("Network error")
+    fun `test recent login required detection and new UserProfile defaults`() {
+        val recentEx = FirebaseAuthRecentLoginRequiredException("ERROR_REQUIRES_RECENT_LOGIN", "Requires recent authentication")
+        assertTrue(FirebaseAuthService.isRecentLoginRequired(recentEx))
+
+        val defaultProfile = UserProfile(
+            uid = "user_regular_01",
+            name = "Regular User",
+            email = "user@example.com"
         )
-        assertEquals(7, states.size)
+        assertEquals(UserRole.USER, defaultProfile.role)
+        assertEquals(VerificationStatus.UNVERIFIED, defaultProfile.verificationStatus)
+        assertFalse(defaultProfile.isEmergencyDonor)
+        assertEquals(0, defaultProfile.donationCount)
     }
 }

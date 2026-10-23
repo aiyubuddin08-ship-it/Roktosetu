@@ -1,6 +1,8 @@
 package com.example.ui.screens.auth
 
-import androidx.compose.animation.AnimatedVisibility
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -19,13 +21,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Bloodtype
 import androidx.compose.material.icons.filled.CalendarMonth
-import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockReset
 import androidx.compose.material.icons.filled.MarkEmailRead
@@ -42,11 +43,11 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Divider
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -63,12 +64,15 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -76,10 +80,29 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.credentials.CredentialManager
+import androidx.credentials.GetCredentialRequest
+import androidx.credentials.exceptions.GetCredentialCancellationException
+import androidx.credentials.exceptions.NoCredentialException
+import com.example.R
+import com.example.domain.LocationHelper
 import com.example.model.BloodGroup
 import com.example.model.DonorAvailability
 import com.example.ui.theme.BloodRed
 import com.example.ui.viewmodel.AuthViewModel
+import com.google.android.libraries.identity.googleid.GetGoogleIdOption
+import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
+import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
+import kotlinx.coroutines.launch
+
+private fun Context.findActivity(): Activity {
+    var context = this
+    while (context is ContextWrapper) {
+        if (context is Activity) return context
+        context = context.baseContext
+    }
+    throw IllegalStateException("CredMan requires an Activity context")
+}
 
 // ==========================================
 // 1. SIGN IN SCREEN
@@ -91,8 +114,13 @@ fun LoginScreen(
     onNavigateToRegister: () -> Unit,
     onNavigateToForgotPassword: () -> Unit,
     onLoginSuccess: () -> Unit,
-    onNavigateBack: (() -> Unit)? = null
+    onNavigateBack: (() -> Unit)? = null,
+    onAdminLoginSuccess: (() -> Unit)? = null
 ) {
+    val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+    val webClientId = stringResource(R.string.default_web_client_id)
+
     val uiState by authViewModel.uiState.collectAsState()
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
@@ -172,7 +200,7 @@ fun LoginScreen(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
-            Spacer(modifier = Modifier.height(32.dp))
+            Spacer(modifier = Modifier.height(28.dp))
 
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -190,12 +218,79 @@ fun LoginScreen(
                         style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
                     )
                     Text(
-                        text = "Enter your credentials to access your account",
+                        text = "Sign in with Google or your registered email",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
 
-                    Spacer(modifier = Modifier.height(18.dp))
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    // Google Sign-In via Jetpack CredentialManager
+                    OutlinedButton(
+                        onClick = {
+                            if (webClientId.isBlank() || webClientId.startsWith("YOUR_", ignoreCase = true)) {
+                                authViewModel.reportError("Google Sign-In Web Client ID is not configured.")
+                                return@OutlinedButton
+                            }
+                            coroutineScope.launch {
+                                try {
+                                    val activity = context.findActivity()
+                                    val credentialManager = CredentialManager.create(activity)
+                                    val signInOption = GetSignInWithGoogleOption.Builder(webClientId).build()
+                                    val request = GetCredentialRequest.Builder()
+                                        .addCredentialOption(signInOption)
+                                        .build()
+                                    val result = try {
+                                        credentialManager.getCredential(activity, request)
+                                    } catch (e: NoCredentialException) {
+                                        val fallbackOption = GetGoogleIdOption.Builder()
+                                            .setFilterByAuthorizedAccounts(false)
+                                            .setServerClientId(webClientId)
+                                            .build()
+                                        val fallbackReq = GetCredentialRequest.Builder()
+                                            .addCredentialOption(fallbackOption)
+                                            .build()
+                                        credentialManager.getCredential(activity, fallbackReq)
+                                    }
+                                    val googleIdTokenCredential = GoogleIdTokenCredential.createFrom(result.credential.data)
+                                    authViewModel.signInWithGoogle(googleIdTokenCredential.idToken, onLoginSuccess)
+                                } catch (e: GetCredentialCancellationException) {
+                                    authViewModel.reportError(context.getString(R.string.auth_google_cancelled))
+                                } catch (e: NoCredentialException) {
+                                    authViewModel.reportError(context.getString(R.string.auth_google_no_credential))
+                                } catch (e: Exception) {
+                                    authViewModel.reportError(e.localizedMessage ?: "Google Sign-In failed.")
+                                }
+                            }
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                            .testTag("btn_google_sign_in"),
+                        shape = RoundedCornerShape(12.dp),
+                        enabled = !uiState.isLoading
+                    ) {
+                        Icon(Icons.Default.AccountCircle, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Continue with Google", fontWeight = FontWeight.Bold)
+                    }
+
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        HorizontalDivider(modifier = Modifier.weight(1f))
+                        Text(
+                            text = "  OR EMAIL  ",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        HorizontalDivider(modifier = Modifier.weight(1f))
+                    }
+
+                    Spacer(modifier = Modifier.height(14.dp))
 
                     OutlinedTextField(
                         value = email,
@@ -250,7 +345,12 @@ fun LoginScreen(
 
                     Button(
                         onClick = {
-                            authViewModel.signIn(email, password, onLoginSuccess)
+                            authViewModel.signIn(
+                                email = email,
+                                pass = password,
+                                onSuccess = onLoginSuccess,
+                                onAdminSuccess = onAdminLoginSuccess ?: onLoginSuccess
+                            )
                         },
                         modifier = Modifier
                             .fillMaxWidth()
@@ -318,12 +418,21 @@ fun RegisterScreen(
     var passwordVisible by remember { mutableStateOf(false) }
     var phone by remember { mutableStateOf("") }
     var dob by remember { mutableStateOf("") }
-    var city by remember { mutableStateOf("Dhaka") }
+    var division by remember { mutableStateOf("Dhaka") }
+    var district by remember { mutableStateOf("Dhaka") }
+    var upazila by remember { mutableStateOf("") }
     var area by remember { mutableStateOf("") }
     var selectedBloodGroup by remember { mutableStateOf(BloodGroup.O_POSITIVE) }
     var isDonor by remember { mutableStateOf(true) }
     var termsAccepted by remember { mutableStateOf(false) }
-    var expandedDropdown by remember { mutableStateOf(false) }
+
+    var expandedBloodDropdown by remember { mutableStateOf(false) }
+    var expandedDivisionDropdown by remember { mutableStateOf(false) }
+    var expandedDistrictDropdown by remember { mutableStateOf(false) }
+
+    val availableDistricts = remember(division) {
+        LocationHelper.getDistrictsForDivision(division)
+    }
 
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -454,8 +563,8 @@ fun RegisterScreen(
 
                     // Blood Group Selection
                     ExposedDropdownMenuBox(
-                        expanded = expandedDropdown,
-                        onExpandedChange = { expandedDropdown = !expandedDropdown },
+                        expanded = expandedBloodDropdown,
+                        onExpandedChange = { expandedBloodDropdown = !expandedBloodDropdown },
                         modifier = Modifier.fillMaxWidth().testTag("blood_group_dropdown")
                     ) {
                         OutlinedTextField(
@@ -464,21 +573,88 @@ fun RegisterScreen(
                             readOnly = true,
                             label = { Text("Blood Group (রক্তের গ্রুপ) *") },
                             leadingIcon = { Icon(Icons.Default.Bloodtype, contentDescription = null, tint = BloodRed) },
-                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandedDropdown) },
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandedBloodDropdown) },
                             modifier = Modifier.fillMaxWidth().menuAnchor()
                         )
                         ExposedDropdownMenu(
-                            expanded = expandedDropdown,
-                            onDismissRequest = { expandedDropdown = false }
+                            expanded = expandedBloodDropdown,
+                            onDismissRequest = { expandedBloodDropdown = false }
                         ) {
                             BloodGroup.entries.forEach { bg ->
                                 DropdownMenuItem(
                                     text = { Text("${bg.display} - ${bg.bengaliDisplay}") },
                                     onClick = {
                                         selectedBloodGroup = bg
-                                        expandedDropdown = false
+                                        expandedBloodDropdown = false
                                     }
                                 )
+                            }
+                        }
+                    }
+
+                    // Division & District Selection
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        ExposedDropdownMenuBox(
+                            expanded = expandedDivisionDropdown,
+                            onExpandedChange = { expandedDivisionDropdown = !expandedDivisionDropdown },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            OutlinedTextField(
+                                value = division,
+                                onValueChange = {},
+                                readOnly = true,
+                                label = { Text("Division (বিভাগ)") },
+                                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandedDivisionDropdown) },
+                                modifier = Modifier.fillMaxWidth().menuAnchor(),
+                                singleLine = true
+                            )
+                            ExposedDropdownMenu(
+                                expanded = expandedDivisionDropdown,
+                                onDismissRequest = { expandedDivisionDropdown = false }
+                            ) {
+                                LocationHelper.DIVISIONS.forEach { div ->
+                                    DropdownMenuItem(
+                                        text = { Text(div) },
+                                        onClick = {
+                                            division = div
+                                            district = LocationHelper.getDistrictsForDivision(div).firstOrNull() ?: div
+                                            expandedDivisionDropdown = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+
+                        ExposedDropdownMenuBox(
+                            expanded = expandedDistrictDropdown,
+                            onExpandedChange = { expandedDistrictDropdown = !expandedDistrictDropdown },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            OutlinedTextField(
+                                value = district,
+                                onValueChange = {},
+                                readOnly = true,
+                                label = { Text("District (জেলা)") },
+                                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandedDistrictDropdown) },
+                                modifier = Modifier.fillMaxWidth().menuAnchor().testTag("input_reg_city"),
+                                singleLine = true
+                            )
+                            ExposedDropdownMenu(
+                                expanded = expandedDistrictDropdown,
+                                onDismissRequest = { expandedDistrictDropdown = false }
+                            ) {
+                                availableDistricts.forEach { dist ->
+                                    DropdownMenuItem(
+                                        text = { Text(dist) },
+                                        onClick = {
+                                            district = dist
+                                            expandedDistrictDropdown = false
+                                        }
+                                    )
+                                }
                             }
                         }
                     }
@@ -488,17 +664,17 @@ fun RegisterScreen(
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         OutlinedTextField(
-                            value = city,
-                            onValueChange = { city = it },
-                            label = { Text("City / District") },
+                            value = upazila,
+                            onValueChange = { upazila = it },
+                            label = { Text("Upazila / Thana") },
                             leadingIcon = { Icon(Icons.Default.Place, contentDescription = null) },
-                            modifier = Modifier.weight(1f).testTag("input_reg_city"),
+                            modifier = Modifier.weight(1f).testTag("input_reg_upazila"),
                             singleLine = true
                         )
                         OutlinedTextField(
                             value = area,
                             onValueChange = { area = it },
-                            label = { Text("Area / Thana") },
+                            label = { Text("Area / Locality") },
                             modifier = Modifier.weight(1f).testTag("input_reg_area"),
                             singleLine = true
                         )
@@ -524,7 +700,7 @@ fun RegisterScreen(
                                 style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
                             )
                             Text(
-                                text = "Allow patients in emergency to reach out",
+                                text = "Allow patients in your district to find your donor profile",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -560,7 +736,10 @@ fun RegisterScreen(
                                 dob = dob,
                                 isDonor = isDonor,
                                 termsAccepted = termsAccepted,
-                                city = city,
+                                division = division,
+                                district = district,
+                                upazila = upazila,
+                                city = district,
                                 area = area,
                                 onSuccess = onRegisterSuccess
                             )
@@ -653,7 +832,7 @@ fun EmailVerificationScreen(
             Spacer(modifier = Modifier.height(20.dp))
 
             Text(
-                text = "Verify Your Email Address",
+                text = stringResource(R.string.auth_verify_email_title),
                 style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
                 textAlign = TextAlign.Center
             )
@@ -661,7 +840,10 @@ fun EmailVerificationScreen(
             Spacer(modifier = Modifier.height(8.dp))
 
             Text(
-                text = "We sent a verification link to your email:\n${userProfile?.email ?: "your registered email"}\n\nPlease click the link in your email to activate your account and access RoktoSetu.",
+                text = stringResource(
+                    R.string.auth_verify_email_subtitle,
+                    userProfile?.email?.ifBlank { "your registered email" } ?: "your registered email"
+                ),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
@@ -686,7 +868,7 @@ fun EmailVerificationScreen(
                 } else {
                     Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(20.dp))
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("I've Verified My Email", fontWeight = FontWeight.Bold)
+                    Text(stringResource(R.string.auth_btn_verified), fontWeight = FontWeight.Bold)
                 }
             }
 
@@ -699,9 +881,13 @@ fun EmailVerificationScreen(
                     .height(50.dp)
                     .testTag("btn_resend_verification"),
                 shape = RoundedCornerShape(12.dp),
-                enabled = !uiState.isLoading
+                enabled = !uiState.isLoading && uiState.resendCooldownSeconds == 0
             ) {
-                Text("Resend Verification Email")
+                if (uiState.resendCooldownSeconds > 0) {
+                    Text(stringResource(R.string.auth_btn_resend_cooldown, uiState.resendCooldownSeconds))
+                } else {
+                    Text(stringResource(R.string.auth_btn_resend))
+                }
             }
 
             Spacer(modifier = Modifier.height(20.dp))
@@ -843,15 +1029,26 @@ fun ProfileCompletionScreen(
     onCompletionSuccess: () -> Unit
 ) {
     val uiState by authViewModel.uiState.collectAsState()
+    val currentProfile by authViewModel.currentUserProfile.collectAsState()
 
-    var name by remember { mutableStateOf("") }
-    var phone by remember { mutableStateOf("") }
-    var dob by remember { mutableStateOf("") }
-    var city by remember { mutableStateOf("Dhaka") }
-    var area by remember { mutableStateOf("") }
-    var selectedBloodGroup by remember { mutableStateOf(BloodGroup.O_POSITIVE) }
-    var isDonor by remember { mutableStateOf(true) }
+    var name by remember(currentProfile?.uid) { mutableStateOf(currentProfile?.name ?: "") }
+    var phone by remember(currentProfile?.uid) { mutableStateOf(currentProfile?.contactPhone ?: "") }
+    var dob by remember(currentProfile?.uid) { mutableStateOf(currentProfile?.dateOfBirth ?: "") }
+    var division by remember(currentProfile?.uid) { mutableStateOf(currentProfile?.location?.division?.ifBlank { "Dhaka" } ?: "Dhaka") }
+    var district by remember(currentProfile?.uid) { mutableStateOf(currentProfile?.location?.district?.ifBlank { "Dhaka" } ?: "Dhaka") }
+    var upazila by remember(currentProfile?.uid) { mutableStateOf(currentProfile?.location?.upazila ?: "") }
+    var area by remember(currentProfile?.uid) { mutableStateOf(currentProfile?.location?.area ?: "") }
+    var selectedBloodGroup by remember(currentProfile?.uid) { mutableStateOf(currentProfile?.bloodGroup ?: BloodGroup.O_POSITIVE) }
+    var isDonor by remember(currentProfile?.uid) { mutableStateOf(currentProfile?.isDonor ?: true) }
+    var isEmergencyOptIn by remember(currentProfile?.uid) { mutableStateOf(false) }
+
     var expandedDropdown by remember { mutableStateOf(false) }
+    var expandedDivision by remember { mutableStateOf(false) }
+    var expandedDistrict by remember { mutableStateOf(false) }
+
+    val availableDistricts = remember(division) {
+        LocationHelper.getDistrictsForDivision(division)
+    }
 
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -880,7 +1077,7 @@ fun ProfileCompletionScreen(
                 style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold)
             )
             Text(
-                text = "Please provide your blood group and emergency contact details to finish setting up your account.",
+                text = "Please provide your blood group and location details to finish setting up your account.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center
@@ -963,10 +1160,76 @@ fun ProfileCompletionScreen(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
+                        ExposedDropdownMenuBox(
+                            expanded = expandedDivision,
+                            onExpandedChange = { expandedDivision = !expandedDivision },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            OutlinedTextField(
+                                value = division,
+                                onValueChange = {},
+                                readOnly = true,
+                                label = { Text("Division") },
+                                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandedDivision) },
+                                modifier = Modifier.fillMaxWidth().menuAnchor(),
+                                singleLine = true
+                            )
+                            ExposedDropdownMenu(
+                                expanded = expandedDivision,
+                                onDismissRequest = { expandedDivision = false }
+                            ) {
+                                LocationHelper.DIVISIONS.forEach { div ->
+                                    DropdownMenuItem(
+                                        text = { Text(div) },
+                                        onClick = {
+                                            division = div
+                                            district = LocationHelper.getDistrictsForDivision(div).firstOrNull() ?: div
+                                            expandedDivision = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+
+                        ExposedDropdownMenuBox(
+                            expanded = expandedDistrict,
+                            onExpandedChange = { expandedDistrict = !expandedDistrict },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            OutlinedTextField(
+                                value = district,
+                                onValueChange = {},
+                                readOnly = true,
+                                label = { Text("District") },
+                                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandedDistrict) },
+                                modifier = Modifier.fillMaxWidth().menuAnchor(),
+                                singleLine = true
+                            )
+                            ExposedDropdownMenu(
+                                expanded = expandedDistrict,
+                                onDismissRequest = { expandedDistrict = false }
+                            ) {
+                                availableDistricts.forEach { dist ->
+                                    DropdownMenuItem(
+                                        text = { Text(dist) },
+                                        onClick = {
+                                            district = dist
+                                            expandedDistrict = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
                         OutlinedTextField(
-                            value = city,
-                            onValueChange = { city = it },
-                            label = { Text("City") },
+                            value = upazila,
+                            onValueChange = { upazila = it },
+                            label = { Text("Upazila / Thana") },
                             modifier = Modifier.weight(1f),
                             singleLine = true
                         )
@@ -998,9 +1261,25 @@ fun ProfileCompletionScreen(
                                 style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
                             )
                             Text(
-                                text = "Be discoverable for emergency blood requests",
+                                text = "Be discoverable for blood requests in your district",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    if (isDonor) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Checkbox(
+                                checked = isEmergencyOptIn,
+                                onCheckedChange = { isEmergencyOptIn = it }
+                            )
+                            Text(
+                                text = "Opt in to Emergency Push Alerts",
+                                style = MaterialTheme.typography.bodySmall
                             )
                         }
                     }
@@ -1014,8 +1293,11 @@ fun ProfileCompletionScreen(
                                 dob = dob,
                                 isDonor = isDonor,
                                 donorAvailability = if (isDonor) DonorAvailability.AVAILABLE else DonorAvailability.UNAVAILABLE,
-                                isEmergencyDonor = isDonor,
-                                city = city,
+                                isEmergencyDonor = isDonor && isEmergencyOptIn,
+                                division = division,
+                                district = district,
+                                upazila = upazila,
+                                city = district,
                                 area = area,
                                 onSuccess = onCompletionSuccess
                             )
@@ -1034,6 +1316,15 @@ fun ProfileCompletionScreen(
                         }
                     }
                 }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            TextButton(
+                onClick = { authViewModel.signOut() },
+                modifier = Modifier.testTag("btn_profile_completion_signout")
+            ) {
+                Text("Sign Out / Switch Account", color = MaterialTheme.colorScheme.error)
             }
 
             Spacer(modifier = Modifier.height(24.dp))

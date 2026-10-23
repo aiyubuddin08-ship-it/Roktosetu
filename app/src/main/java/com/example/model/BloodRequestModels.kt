@@ -1,26 +1,23 @@
 package com.example.model
 
-/**
- * Urgency level for blood requests.
- */
-enum class RequestUrgency(val display: String, val bengaliDisplay: String) {
-    CRITICAL_EMERGENCY("Critical Emergency (ICU/OT)", "জরুরী (আইসিইউ/ওটি)"),
-    HIGH("High Urgency (Today)", "জরুরী (আজকের মধ্যে)"),
-    NORMAL("Normal / Scheduled", "সাধারণ / নির্ধারিত")
+enum class RequestUrgency(val display: String, val bengaliDisplay: String, val priorityScore: Int) {
+    STANDARD("Standard", "সাধারণ", 1),
+    HIGH("Urgent", "জরুরী", 2),
+    CRITICAL_EMERGENCY("Critical Emergency", "অতি জরুরী (Emergency)", 3)
 }
 
-/**
- * Lifecycle status of a blood request.
- */
 enum class RequestStatus(val display: String, val bengaliDisplay: String) {
-    PENDING("Searching Donors", "রক্তদাতা খোঁজা হচ্ছে"),
-    ACCEPTED("Donor Committed", "রক্তদাতা নিশ্চিত হয়েছে"),
-    FULFILLED("Fulfilled / Donated", "সম্পন্ন হয়েছে"),
-    CANCELLED("Cancelled", "বাতিল করা হয়েছে")
+    PENDING("Pending", "অপেক্ষমাণ"),
+    DONOR_RESPONDED("Donor Responded", "রক্তদাতা সাড়া দিয়েছেন"),
+    ACCEPTED("Donor Assigned", "রক্তদাতা নিশ্চিত"),
+    FULFILLED("Fulfilled", "সম্পন্ন"),
+    CANCELLED("Cancelled", "বাতিল"),
+    EXPIRED("Expired", "মেয়াদোত্তীর্ণ")
 }
 
 /**
- * Blood Request entity stored in Firestore 'blood_requests/{requestId}'.
+ * Blood Request document stored in `/blood_requests/{id}`.
+ * Completely map-free: uses division, district, upazila, area, and hospitalName.
  */
 data class BloodRequest(
     val id: String = "",
@@ -33,19 +30,52 @@ data class BloodRequest(
     val unitsFulfilled: Int = 0,
     val hospitalName: String = "",
     val hospitalAddress: String = "",
-    val city: String = "",
-    val latitude: Double = 0.0,
-    val longitude: Double = 0.0,
+    val division: String = "Dhaka",
+    val district: String = "Dhaka",
+    val upazila: String = "",
+    val area: String = "",
+    val city: String = "Dhaka",
     val urgency: RequestUrgency = RequestUrgency.HIGH,
-    val requiredDateTime: Long = System.currentTimeMillis() + (6 * 60 * 60 * 1000), // Default 6 hrs
-    val contactPhone: String = "",
-    val alternativePhone: String = "",
-    val medicalReason: String = "",
     val status: RequestStatus = RequestStatus.PENDING,
+    val contactPhone: String = "",
+    val medicalReason: String = "",
+    val requiredDateTime: Long = System.currentTimeMillis(),
     val acceptedDonorUid: String? = null,
     val acceptedDonorName: String? = null,
-    val createdAt: Long = System.currentTimeMillis(),
+    val respondedDonorUids: List<String> = emptyList(),
     val isEmergencyBroadcast: Boolean = false,
-    val verifiedByOrgId: String? = null,
-    val distanceKm: Double? = null
-)
+    val createdAt: Long = System.currentTimeMillis(),
+    val updatedAt: Long = System.currentTimeMillis(),
+    val expiresAt: Long = System.currentTimeMillis() + 72 * 3600 * 1000L // 72 hours validity
+) {
+    fun toFirestoreMap(): Map<String, Any> {
+        val effectiveDistrict = district.ifBlank { city.ifBlank { "Dhaka" } }
+        val effectiveDivision = division.ifBlank { "Dhaka" }
+        return mapOf<String, Any?>(
+            "requesterUid" to requesterUid,
+            "requesterName" to requesterName,
+            "patientName" to patientName,
+            "patientAge" to patientAge,
+            "bloodGroup" to bloodGroup.name,
+            "unitsRequired" to unitsRequired,
+            "hospitalName" to hospitalName,
+            "hospitalAddress" to hospitalAddress,
+            "division" to effectiveDivision,
+            "district" to effectiveDistrict,
+            "upazila" to upazila,
+            "area" to area,
+            "city" to city.ifBlank { effectiveDistrict },
+            "urgency" to urgency.name,
+            "status" to status.name,
+            "contactPhone" to contactPhone,
+            "medicalReason" to medicalReason,
+            "acceptedDonorUid" to acceptedDonorUid,
+            "acceptedDonorName" to acceptedDonorName,
+            "respondedDonorUids" to respondedDonorUids,
+            "isEmergencyBroadcast" to isEmergencyBroadcast,
+            "createdAt" to createdAt,
+            "updatedAt" to updatedAt,
+            "expiresAt" to expiresAt
+        ).filterValues { it != null } as Map<String, Any>
+    }
+}

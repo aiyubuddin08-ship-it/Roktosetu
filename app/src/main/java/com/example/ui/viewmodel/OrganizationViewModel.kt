@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.data.repository.RoktoSetuRepository
 import com.example.model.Campaign
 import com.example.model.Organization
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -15,7 +16,8 @@ data class OrgUiState(
     val organizations: List<Organization> = emptyList(),
     val campaigns: List<Campaign> = emptyList(),
     val isLoading: Boolean = false,
-    val selectedCity: String = ""
+    val selectedCity: String = "",
+    val errorMessage: String? = null
 )
 
 class OrganizationViewModel(
@@ -25,21 +27,42 @@ class OrganizationViewModel(
     private val _uiState = MutableStateFlow(OrgUiState())
     val uiState: StateFlow<OrgUiState> = _uiState.asStateFlow()
 
+    private var orgsJob: Job? = null
+    private var campaignsJob: Job? = null
+
     init {
-        loadData()
+        viewModelScope.launch {
+            repository.currentUserProfile.collect {
+                loadData()
+            }
+        }
     }
 
     fun loadData() {
-        viewModelScope.launch {
-            repository.getOrganizations().collect { orgs ->
+        orgsJob?.cancel()
+        orgsJob = viewModelScope.launch {
+            repository.getOrganizations(
+                onError = { msg ->
+                    _uiState.value = _uiState.value.copy(errorMessage = msg)
+                }
+            ).collect { orgs ->
                 _uiState.value = _uiState.value.copy(organizations = orgs)
             }
         }
-        viewModelScope.launch {
-            repository.getCampaigns().collect { camps ->
+        campaignsJob?.cancel()
+        campaignsJob = viewModelScope.launch {
+            repository.getCampaigns(
+                onError = { msg ->
+                    _uiState.value = _uiState.value.copy(errorMessage = msg)
+                }
+            ).collect { camps ->
                 _uiState.value = _uiState.value.copy(campaigns = camps)
             }
         }
+    }
+
+    fun clearError() {
+        _uiState.value = _uiState.value.copy(errorMessage = null)
     }
 }
 

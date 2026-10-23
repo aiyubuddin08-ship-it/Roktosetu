@@ -1,13 +1,15 @@
 package com.example.data.repository
 
 import android.content.Context
+import android.net.Uri
+import com.example.R
 import com.example.data.firebase.FirebaseAuthService
 import com.example.data.firebase.FirestoreService
 import com.example.data.firebase.Resource
 import com.example.data.local.CachedDonorEntity
 import com.example.data.local.CachedRequestEntity
 import com.example.data.local.RoktoSetuDatabase
-import com.example.model.AppNotification
+import com.example.model.AuditLogEntry
 import com.example.model.AuthState
 import com.example.model.BloodGroup
 import com.example.model.BloodRequest
@@ -16,101 +18,52 @@ import com.example.model.ChatMessage
 import com.example.model.Conversation
 import com.example.model.DonationRecord
 import com.example.model.DonorAvailability
-import com.example.model.LocationInfo
 import com.example.model.Organization
 import com.example.model.PublicDonorView
 import com.example.model.RequestStatus
+import com.example.model.RequestUrgency
 import com.example.model.SystemMetrics
 import com.example.model.UserProfile
-import com.example.model.VerificationStatus
-import com.google.firebase.auth.FirebaseUser
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
+import com.example.model.VerificationTask
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.launch
 
+/**
+ * Central Repository coordinating Firebase Auth, Cloud Firestore (using the custom
+ * `R.string.firestore_database_id` database), and offline Room cache.
+ */
 class RoktoSetuRepository(
-    context: Context,
-    val authService: FirebaseAuthService = FirebaseAuthService(),
-    val firestoreService: FirestoreService = FirestoreService()
+    private val authService: FirebaseAuthService,
+    private val firestoreService: FirestoreService,
+    private val localDb: RoktoSetuDatabase? = null
 ) {
-    private val localDb = RoktoSetuDatabase.getDatabase(context)
-    private val dao = localDb.cachedDataDao()
-    private val scope = CoroutineScope(Dispatchers.IO)
+    constructor(context: Context) : this(
+        authService = FirebaseAuthService(context.applicationContext),
+        firestoreService = FirestoreService(
+            FirebaseFirestore.getInstance(
+                context.applicationContext.getString(R.string.firestore_database_id)
+            )
+        ),
+        localDb = RoktoSetuDatabase.getDatabase(context.applicationContext)
+    )
 
-    private val _currentUserProfile = MutableStateFlow<UserProfile?>(null)
-    val currentUserProfile: StateFlow<UserProfile?> = _currentUserProfile.asStateFlow()
+    constructor(firestore: FirebaseFirestore, auth: FirebaseAuth = FirebaseAuth.getInstance()) : this(
+        authService = FirebaseAuthService(auth, firestore),
+        firestoreService = FirestoreService(firestore),
+        localDb = null
+    )
 
-    private val _authState = MutableStateFlow<AuthState>(AuthState.Loading)
-    val authState: StateFlow<AuthState> = _authState.asStateFlow()
+    val currentUserProfile: StateFlow<UserProfile?> = authService.currentUserProfile
+    val authState: StateFlow<AuthState> = authService.authState
+    val isAuthenticated: Boolean get() = authService.isAuthenticated
+    val currentUserId: String? get() = authService.currentUserId
 
-    init {
-        // Observe auth state and sync user profile in real time
-        scope.launch {
-            authService.authStateFlow().collect { user ->
-                if (user == null) {
-                    _currentUserProfile.value = null
-                    _authState.value = AuthState.Unauthenticated
-                } else {
-                    // Check if email is verified
-                    val isVerified = user.isEmailVerified
-                    firestoreService.observeUserProfile(user.uid).collect { profile ->
-                        _currentUserProfile.value = profile
-                        if (profile == null) {
-                            // User is logged in to Firebase Auth, but Firestore profile is missing
-                            _authState.value = AuthState.ProfileCompletionRequired
-                        } else if (!profile.isAccountActive) {
-                            // Account is deactivated / disabled
-                            _authState.value = AuthState.AccountDisabled
-                        } else if (!isVerified && user.providerData.any { it.providerId == "password" }) {
-                            // Password accounts require email verification
-                            _authState.value = AuthState.EmailVerificationRequired
-                        } else {
-                            _authState.value = AuthState.Authenticated
-                        }
-                    }
-                }
-            }
-        }
-    }
+    // --- Authentication Operations ---
 
-    val currentUser: FirebaseUser?
-        get() = authService.currentUser
-
-    val currentUserId: String?
-        get() = authService.currentUserId
-
-    // ==========================================
-    // AUTHENTICATION
-    // ==========================================
-
-    suspend fun signIn(email: String, pass: String): Resource<FirebaseUser?> {
-        val result = authService.signInWithEmail(email, pass)
-        if (result is Resource.Success) {
-            val uid = result.data?.uid ?: authService.currentUserId ?: "rs_usr"
-            var profile = firestoreService.getUserProfile(uid) ?: authService.getLocalUserProfile(email)
-            if (profile == null) {
-                profile = UserProfile(
-                    uid = uid,
-                    name = email.substringBefore("@").replaceFirstChar { it.uppercase() },
-                    email = email,
-                    bloodGroup = BloodGroup.O_POSITIVE,
-                    isDonor = true,
-                    donorAvailability = DonorAvailability.AVAILABLE,
-                    contactPhone = "01897971573",
-                    location = LocationInfo(city = "Dhaka", area = "Savar"),
-                    verificationStatus = VerificationStatus.VERIFIED
-                )
-                FirestoreService.localUserProfiles[uid] = profile
-            }
-            _currentUserProfile.value = profile
-            _authState.value = AuthState.Authenticated
-        }
-        return result
-    }
+    suspend fun signIn(email: String, pass: String): Resource<UserProfile> =
+        authService.signInWithEmail(email, pass)
 
     suspend fun register(
         email: String,
@@ -119,76 +72,28 @@ class RoktoSetuRepository(
         bloodGroup: BloodGroup,
         isDonor: Boolean,
         phone: String,
-        city: String,
-        area: String,
-        dateOfBirth: String
-    ): Resource<UserProfile> {
-        val result = authService.registerWithEmail(
-            email = email,
-            pass = pass,
-            name = name,
-            bloodGroup = bloodGroup,
-            isDonor = isDonor,
-            phone = phone,
-            city = city,
-            area = area,
-            dateOfBirth = dateOfBirth
-        )
-        if (result is Resource.Success) {
-            _currentUserProfile.value = result.data
-            _authState.value = AuthState.Authenticated
-            try {
-                if (isDonor) {
-                    scope.launch {
-                        dao.insertDonors(
-                            listOf(
-                                CachedDonorEntity(
-                                    uid = result.data.uid,
-                                    name = result.data.name,
-                                    bloodGroup = result.data.bloodGroup.name,
-                                    availability = result.data.donorAvailability.name,
-                                    generalLocation = "${result.data.location.area}, ${result.data.location.city}",
-                                    isEmergencyDonor = result.data.isEmergencyDonor,
-                                    contactPhone = result.data.contactPhone,
-                                    donationCount = result.data.donationCount
-                                )
-                            )
-                        )
-                    }
-                }
-            } catch (_: Exception) {}
-        }
-        return result
-    }
+        division: String = "Dhaka",
+        district: String = "Dhaka",
+        upazila: String = "",
+        city: String = district,
+        area: String = "",
+        dateOfBirth: String = ""
+    ): Resource<UserProfile> = authService.registerWithEmail(
+        email = email,
+        pass = pass,
+        name = name,
+        bloodGroup = bloodGroup,
+        isDonor = isDonor,
+        phone = phone,
+        division = division,
+        district = district.ifBlank { city.ifBlank { "Dhaka" } },
+        upazila = upazila,
+        area = area,
+        dateOfBirth = dateOfBirth
+    )
 
-    suspend fun signInWithGoogle(idToken: String): Resource<FirebaseUser> {
-        return authService.signInWithGoogle(idToken)
-    }
-
-    suspend fun checkEmailVerification(): Boolean {
-        val isVerified = authService.reloadUserAndCheckVerified()
-        val user = authService.currentUser
-        val profile = _currentUserProfile.value
-
-        if (user != null && isVerified) {
-            if (profile == null) {
-                _authState.value = AuthState.ProfileCompletionRequired
-            } else if (!profile.isAccountActive) {
-                _authState.value = AuthState.AccountDisabled
-            } else {
-                _authState.value = AuthState.Authenticated
-            }
-        }
-        return isVerified
-    }
-
-    suspend fun sendEmailVerification(): Resource<Unit> {
-        return authService.sendEmailVerification()
-    }
-
-    suspend fun sendPasswordReset(email: String): Resource<Unit> {
-        return authService.sendPasswordReset(email)
-    }
+    suspend fun signInWithGoogle(idToken: String): Resource<UserProfile> =
+        authService.signInWithGoogleCredential(idToken)
 
     suspend fun completeProfile(
         name: String,
@@ -198,72 +103,279 @@ class RoktoSetuRepository(
         isDonor: Boolean,
         donorAvailability: DonorAvailability,
         isEmergencyDonor: Boolean,
-        city: String,
-        area: String,
-        photoUrl: String
-    ): Resource<UserProfile> {
-        val result = authService.completeProfile(
-            name = name,
-            phone = phone,
-            bloodGroup = bloodGroup,
-            dateOfBirth = dateOfBirth,
-            isDonor = isDonor,
-            donorAvailability = donorAvailability,
-            isEmergencyDonor = isEmergencyDonor,
-            city = city,
-            area = area,
-            photoUrl = photoUrl
-        )
+        division: String = "Dhaka",
+        district: String = "Dhaka",
+        upazila: String = "",
+        city: String = district,
+        area: String = "",
+        photoUrl: String = ""
+    ): Resource<UserProfile> = authService.completeUserProfile(
+        name = name,
+        phone = phone,
+        bloodGroup = bloodGroup,
+        dateOfBirth = dateOfBirth,
+        isDonor = isDonor,
+        donorAvailability = donorAvailability,
+        isEmergencyDonor = isEmergencyDonor,
+        division = division,
+        district = district.ifBlank { city.ifBlank { "Dhaka" } },
+        upazila = upazila,
+        area = area,
+        photoUrl = photoUrl
+    )
+
+    suspend fun sendEmailVerification(): Resource<Unit> = authService.sendEmailVerification()
+
+    suspend fun checkEmailVerification(): Boolean = authService.checkEmailVerification()
+
+    suspend fun sendPasswordReset(email: String): Resource<Unit> =
+        authService.sendPasswordResetEmail(email)
+
+    suspend fun updateProfile(profile: UserProfile): Resource<UserProfile> =
+        authService.updateProfile(profile)
+
+    suspend fun deleteAccount(reauthPassword: String? = null): Resource<Unit> {
+        val result = authService.deleteAccount(reauthPassword)
         if (result is Resource.Success) {
-            _currentUserProfile.value = result.data
-            _authState.value = AuthState.Authenticated
+            localDb?.cachedDataDao()?.clearDonors()
+            localDb?.cachedDataDao()?.clearRequests()
         }
         return result
     }
 
+    suspend fun clearLocalUserCache() {
+        localDb?.cachedDataDao()?.clearDonors()
+        localDb?.cachedDataDao()?.clearRequests()
+    }
+
     fun signOut() {
         authService.signOut()
-        _currentUserProfile.value = null
-        _authState.value = AuthState.Unauthenticated
     }
 
-    suspend fun deleteAccount(): Resource<Unit> {
-        val res = authService.deleteAccount()
-        if (res is Resource.Success) {
-            _currentUserProfile.value = null
-            _authState.value = AuthState.Unauthenticated
-        }
-        return res
+    // --- Blood Requests ---
+
+    fun getBloodRequests(
+        filterBloodGroup: BloodGroup? = null,
+        divisionFilter: String? = null,
+        districtFilter: String? = null,
+        upazilaFilter: String? = null,
+        areaQuery: String? = null,
+        onError: ((String) -> Unit)? = null
+    ): Flow<List<BloodRequest>> =
+        firestoreService.observeBloodRequests(
+            filterBloodGroup = filterBloodGroup,
+            divisionFilter = divisionFilter,
+            districtFilter = districtFilter,
+            upazilaFilter = upazilaFilter,
+            areaQuery = areaQuery,
+            onError = onError
+        )
+
+    suspend fun createBloodRequest(request: BloodRequest): Resource<String> {
+        val activeUid = request.requesterUid.ifBlank { currentUserId ?: "" }
+        return firestoreService.createBloodRequest(request.copy(requesterUid = activeUid))
     }
 
-    // ==========================================
-    // USER PROFILE
-    // ==========================================
+    suspend fun acceptBloodRequest(
+        requestId: String,
+        donorUid: String,
+        donorName: String,
+        donorBloodGroup: BloodGroup? = null
+    ): Resource<Unit> =
+        firestoreService.acceptBloodRequest(requestId, donorUid, donorName, donorBloodGroup)
 
-    suspend fun updateProfile(profile: UserProfile): Resource<Unit> {
-        _currentUserProfile.value = profile
-        return firestoreService.updateUserProfile(profile)
-    }
+    suspend fun updateRequestStatus(requestId: String, status: RequestStatus): Resource<Unit> =
+        firestoreService.updateRequestStatus(requestId, status)
 
-    // ==========================================
-    // DONORS & OFFLINE CACHING
-    // ==========================================
+    // --- Public Donors Search (Map-Free: Division, District, Upazila, Area) ---
 
     fun getDonors(
         filterBloodGroup: BloodGroup? = null,
-        cityFilter: String? = null,
-        userLat: Double = 0.0,
-        userLon: Double = 0.0
-    ): Flow<List<PublicDonorView>> {
-        return firestoreService.observeDonors(filterBloodGroup, cityFilter, userLat, userLon)
+        includeCompatibleForRecipient: Boolean = false,
+        includeCompatible: Boolean = includeCompatibleForRecipient,
+        divisionFilter: String? = null,
+        districtFilter: String? = null,
+        upazilaFilter: String? = null,
+        areaQuery: String? = null,
+        areaFilter: String? = areaQuery,
+        onlyAvailable: Boolean = false,
+        onError: ((String) -> Unit)? = null
+    ): Flow<List<PublicDonorView>> =
+        firestoreService.observePublicDonors(
+            filterBloodGroup = filterBloodGroup,
+            includeCompatibleForRecipient = includeCompatible || includeCompatibleForRecipient,
+            divisionFilter = divisionFilter,
+            districtFilter = districtFilter,
+            upazilaFilter = upazilaFilter,
+            areaQuery = areaQuery ?: areaFilter,
+            onlyAvailable = onlyAvailable,
+            onError = onError
+        )
+
+    // --- 1-to-1 Chat ---
+
+    fun getConversations(
+        userUid: String,
+        onError: ((String) -> Unit)? = null
+    ): Flow<List<Conversation>> =
+        firestoreService.observeConversations(userUid, onError)
+
+    fun getMessages(
+        conversationId: String,
+        onError: ((String) -> Unit)? = null
+    ): Flow<List<ChatMessage>> =
+        firestoreService.observeMessages(conversationId, onError)
+
+    suspend fun getOrCreateConversation(
+        myUid: String,
+        myName: String,
+        myBloodGroup: String,
+        otherUid: String,
+        otherName: String,
+        otherBloodGroup: String,
+        requestId: String? = null
+    ): Resource<String> = firestoreService.getOrCreateConversation(
+        myUid, myName, myBloodGroup, otherUid, otherName, otherBloodGroup, requestId
+    )
+
+    suspend fun sendMessage(
+        conversationId: String,
+        senderUid: String,
+        senderName: String,
+        text: String
+    ): Resource<Unit> = firestoreService.sendMessage(conversationId, senderUid, senderName, text)
+
+    // --- Donations, Organizations & Campaigns ---
+
+    fun getUserDonations(
+        donorUid: String,
+        onError: ((String) -> Unit)? = null
+    ): Flow<List<DonationRecord>> =
+        firestoreService.observeUserDonations(donorUid, onError)
+
+    fun getOrganizations(onError: ((String) -> Unit)? = null): Flow<List<Organization>> =
+        firestoreService.observeOrganizations(onError)
+
+    fun getCampaigns(onError: ((String) -> Unit)? = null): Flow<List<Campaign>> =
+        firestoreService.observeCampaigns(onError)
+
+    suspend fun createCampaign(campaign: Campaign): Resource<String> =
+        firestoreService.createCampaign(campaign)
+
+    // --- Admin & Verification Queue ---
+
+    suspend fun checkIsCurrentUserAdmin(uid: String): Boolean {
+        if (uid.isBlank()) return false
+        return authService.isCurrentUserAdmin(forceRefreshToken = true) ||
+            firestoreService.checkIsCurrentUserAdmin(uid)
+    }
+
+    suspend fun checkIsAdmin(): Boolean {
+        val uid = currentUserId ?: return false
+        return checkIsCurrentUserAdmin(uid)
+    }
+
+    suspend fun getSystemMetrics(): SystemMetrics {
+        return firestoreService.fetchSystemMetrics()
+    }
+
+    suspend fun getEmergencyBroadcastArmed(): Boolean {
+        return firestoreService.fetchEmergencyBroadcastArmed()
+    }
+
+    suspend fun setEmergencyBroadcastArmed(armed: Boolean): Resource<Boolean> {
+        val adminUid = currentUserId ?: return Resource.Error("Not signed in as administrator.")
+        val adminEmail = currentUserProfile.value?.email ?: "admin@roktosetu.org"
+        return firestoreService.setEmergencyBroadcastArmed(armed, adminUid, adminEmail)
+    }
+
+    suspend fun uploadVerificationDocument(
+        context: Context,
+        userId: String,
+        uri: Uri
+    ): Resource<String> =
+        firestoreService.uploadVerificationDocument(context, userId, uri)
+
+    suspend fun submitVerificationRequest(
+        applicantUid: String,
+        name: String,
+        type: String,
+        documents: List<String>
+    ): Resource<String> =
+        firestoreService.submitVerificationRequest(applicantUid, name, type, documents)
+
+    suspend fun submitVerificationTask(
+        targetId: String,
+        type: String,
+        name: String,
+        bloodGroup: BloodGroup? = null,
+        documents: List<String>
+    ): Resource<String> =
+        firestoreService.submitVerificationRequest(targetId, name, type, documents)
+
+    fun getPendingVerificationTasks(
+        onError: ((String) -> Unit)? = null
+    ): Flow<List<VerificationTask>> =
+        firestoreService.observePendingVerificationTasks(onError)
+
+    fun getAuditLogs(
+        onError: ((String) -> Unit)? = null
+    ): Flow<List<AuditLogEntry>> =
+        firestoreService.observeAuditLogs(onError)
+
+    suspend fun reviewVerificationTaskAsAdmin(
+        task: VerificationTask,
+        approved: Boolean,
+        adminUid: String,
+        adminEmail: String
+    ): Resource<Unit> =
+        firestoreService.reviewVerificationTaskAsAdmin(task, approved, adminUid, adminEmail)
+
+    suspend fun reviewVerificationTask(
+        task: VerificationTask,
+        approve: Boolean,
+        reason: String = ""
+    ): Resource<Unit> {
+        val adminUid = currentUserId ?: return Resource.Error("Not signed in as administrator.")
+        val adminEmail = currentUserProfile.value?.email ?: "admin@roktosetu.org"
+        return firestoreService.reviewVerificationTaskAsAdmin(task, approve, adminUid, adminEmail)
+    }
+
+    // --- Offline Room Cache ---
+
+    fun getCachedRequests(): Flow<List<CachedRequestEntity>>? =
+        localDb?.cachedDataDao()?.getAllCachedRequests()
+
+    fun getCachedDonors(): Flow<List<CachedDonorEntity>>? =
+        localDb?.cachedDataDao()?.getAllCachedDonors()
+
+    suspend fun cacheRequestsLocally(requests: List<BloodRequest>) {
+        val dao = localDb?.cachedDataDao() ?: return
+        val entities = requests.map {
+            CachedRequestEntity(
+                id = it.id,
+                patientName = it.patientName,
+                bloodGroup = it.bloodGroup.display,
+                unitsRequired = it.unitsRequired,
+                hospitalName = it.hospitalName,
+                hospitalAddress = it.hospitalAddress,
+                city = it.district.ifBlank { it.city },
+                urgency = it.urgency.name,
+                status = it.status.name,
+                contactPhone = it.contactPhone,
+                requiredDateTime = it.requiredDateTime
+            )
+        }
+        dao.insertRequests(entities)
     }
 
     suspend fun cacheDonorsLocally(donors: List<PublicDonorView>) {
+        val dao = localDb?.cachedDataDao() ?: return
         val entities = donors.map {
             CachedDonorEntity(
                 uid = it.uid,
                 name = it.name,
-                bloodGroup = it.bloodGroup.name,
+                bloodGroup = it.bloodGroup.display,
                 availability = it.availability.name,
                 generalLocation = it.generalLocation,
                 isEmergencyDonor = it.isEmergencyDonor,
@@ -274,82 +386,33 @@ class RoktoSetuRepository(
         dao.insertDonors(entities)
     }
 
-    // ==========================================
-    // BLOOD REQUESTS
-    // ==========================================
+    companion object {
+        fun CachedRequestEntity.toBloodRequest(): BloodRequest = BloodRequest(
+            id = id,
+            patientName = patientName,
+            bloodGroup = BloodGroup.fromDisplay(bloodGroup),
+            unitsRequired = unitsRequired,
+            hospitalName = hospitalName,
+            hospitalAddress = hospitalAddress,
+            district = city,
+            city = city,
+            area = hospitalAddress,
+            urgency = runCatching { RequestUrgency.valueOf(urgency) }.getOrDefault(RequestUrgency.HIGH),
+            status = runCatching { RequestStatus.valueOf(status) }.getOrDefault(RequestStatus.PENDING),
+            contactPhone = contactPhone,
+            requiredDateTime = requiredDateTime
+        )
 
-    fun getBloodRequests(
-        filterBloodGroup: BloodGroup? = null,
-        statusFilter: RequestStatus? = null
-    ): Flow<List<BloodRequest>> {
-        return firestoreService.observeBloodRequests(filterBloodGroup, statusFilter)
-    }
-
-    suspend fun createBloodRequest(request: BloodRequest): Resource<String> {
-        return firestoreService.createBloodRequest(request)
-    }
-
-    suspend fun acceptBloodRequest(requestId: String, donorUid: String, donorName: String): Resource<Unit> {
-        return firestoreService.acceptBloodRequest(requestId, donorUid, donorName)
-    }
-
-    suspend fun updateRequestStatus(requestId: String, status: RequestStatus): Resource<Unit> {
-        return firestoreService.updateRequestStatus(requestId, status)
-    }
-
-    // ==========================================
-    // DONATION HISTORY
-    // ==========================================
-
-    fun getUserDonations(donorUid: String): Flow<List<DonationRecord>> {
-        return firestoreService.observeUserDonations(donorUid)
-    }
-
-    // ==========================================
-    // ORGANIZATIONS & CAMPAIGNS
-    // ==========================================
-
-    fun getOrganizations(): Flow<List<Organization>> = firestoreService.observeOrganizations()
-
-    fun getCampaigns(): Flow<List<Campaign>> = firestoreService.observeCampaigns()
-
-    // ==========================================
-    // 1-TO-1 CHAT
-    // ==========================================
-
-    fun getConversations(uid: String): Flow<List<Conversation>> = firestoreService.observeConversations(uid)
-
-    fun getMessages(convId: String): Flow<List<ChatMessage>> = firestoreService.observeMessages(convId)
-
-    suspend fun sendMessage(convId: String, senderUid: String, senderName: String, text: String): Resource<Unit> {
-        return firestoreService.sendMessage(convId, senderUid, senderName, text)
-    }
-
-    suspend fun getOrCreateConversation(
-        myUid: String,
-        myName: String,
-        myBloodGroup: String,
-        otherUid: String,
-        otherName: String,
-        otherBloodGroup: String,
-        requestId: String? = null
-    ): Resource<String> {
-        return firestoreService.getOrCreateConversation(
-            myUid, myName, myBloodGroup, otherUid, otherName, otherBloodGroup, requestId
+        fun CachedDonorEntity.toPublicDonorView(): PublicDonorView = PublicDonorView(
+            uid = uid,
+            name = name,
+            bloodGroup = BloodGroup.fromDisplay(bloodGroup),
+            availability = runCatching { DonorAvailability.valueOf(availability) }.getOrDefault(DonorAvailability.AVAILABLE),
+            generalLocation = generalLocation,
+            area = generalLocation,
+            isEmergencyDonor = isEmergencyDonor,
+            contactPhone = contactPhone,
+            donationCount = donationCount
         )
     }
-
-    // ==========================================
-    // NOTIFICATIONS
-    // ==========================================
-
-    fun getNotifications(uid: String): Flow<List<AppNotification>> = firestoreService.observeNotifications(uid)
-
-    // ==========================================
-    // ADMIN
-    // ==========================================
-
-    suspend fun getSystemMetrics(): SystemMetrics = firestoreService.fetchSystemMetrics()
-
-    suspend fun checkIsAdmin(): Boolean = authService.checkIsAdmin()
 }

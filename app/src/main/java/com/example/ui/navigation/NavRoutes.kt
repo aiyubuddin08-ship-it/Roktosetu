@@ -5,10 +5,7 @@ sealed class Screen(val route: String) {
     object AuthLogin : Screen("auth_login")
     object AuthRegister : Screen("auth_register")
     object AuthForgotPassword : Screen("auth_forgot_password")
-    object AuthEmailVerification : Screen("auth_email_verification")
-    object AuthProfileCompletion : Screen("auth_profile_completion")
-    object AuthAccountDisabled : Screen("auth_account_disabled")
-    
+
     // Main Bottom Nav Destinations
     object Home : Screen("home")
     object EmergencySearch : Screen("emergency_search")

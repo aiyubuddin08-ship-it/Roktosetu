@@ -2,4 +2,28 @@
     <string name="app_name">RoktoSetu</string>
     <string name="app_name_bengali">রক্তসেতু</string>
     <string name="app_tagline">Life Connecting Blood Network</string>
+
+    <!-- Authentication & Session Strings -->
+    <string name="auth_verify_email_title">Verify Your Email Address (ইমেইল যাচাই করুন)</string>
+    <string name="auth_verify_email_subtitle">We sent a verification link to %1$s. Please click the link in your inbox to activate your account.</string>
+    <string name="auth_btn_verified">যাচাই করেছি (I\'ve Verified My Email)</string>
+    <string name="auth_btn_resend">পুনরায় ভেরিফিকেশন ইমেইল পাঠান (Resend Verification Email)</string>
+    <string name="auth_btn_resend_cooldown">আবার পাঠান (%1$d সেকেন্ড) / Resend in %1$ds</string>
+    <string name="auth_reset_password_neutral">ইমেইল নিবন্ধিত থাকলে লিংক পাঠানো হয়েছে (If this email is registered, a password reset link has been sent.)</string>
+    <string name="auth_reauth_title">পুনরায় লগইন নিশ্চিত করুন (Re-authentication Required)</string>
+    <string name="auth_reauth_message">নিরাপত্তার স্বার্থে অ্যাকাউন্ট মুছে ফেলার আগে আপনার বর্তমান পাসওয়ার্ড দিন (For security reasons, please enter your password to confirm account deletion).</string>
+    <string name="auth_reauth_password_label">পাসওয়ার্ড (Password)</string>
+    <string name="auth_reauth_confirm_btn">নিশ্চিত করুন ও মুছুন (Confirm &amp; Delete)</string>
+    <string name="auth_google_cancelled">Google সাইন-ইন বাতিল করা হয়েছে (Google Sign-In was cancelled).</string>
+    <string name="auth_google_no_credential">ডিভাইসে কোনো Google অ্যাকাউন্ট পাওয়া যায়নি (No Google account credential available on this device).</string>
+
+    <!-- FCM Push Notification & Verification Strings -->
+    <string name="fcm_channel_emergency_name">Emergency Blood Alerts</string>
+    <string name="fcm_channel_emergency_desc">Critical blood request notifications and donor chat messages</string>
+    <string name="fcm_default_notification_title">RoktoSetu Emergency Alert</string>
+    <string name="fcm_default_notification_body">A new blood donation update is available.</string>
+    <string name="verification_upload_pick_file">Choose Report File (PDF / Image)</string>
+    <string name="verification_upload_submit">Upload &amp; Submit</string>
+    <string name="donor_card_saved_success">Donor card PNG saved to Pictures/RoktoSetu!</string>
+    <string name="donor_card_saved_error">Could not save donor card image.</string>
 </resources>

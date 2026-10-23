@@ -1,0 +1,370 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Private user account and medical donor profile isolated to the document owner and system administrators.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Firebase Auth UID of the user." },
+        "name": { "type": "string", "description": "Full name of the user (2 to 100 chars)." },
+        "email": { "type": "string", "format": "email", "description": "Registered email address." },
+        "bloodGroup": {
+          "type": "string",
+          "enum": ["A_POSITIVE", "A_NEGATIVE", "B_POSITIVE", "B_NEGATIVE", "O_POSITIVE", "O_NEGATIVE", "AB_POSITIVE", "AB_NEGATIVE"],
+          "description": "ABO and Rh blood group."
+        },
+        "dateOfBirth": { "type": "string", "description": "Date of birth string." },
+        "isDonor": { "type": "boolean", "description": "Whether the user has opted into voluntary blood donation." },
+        "donorAvailability": {
+          "type": "string",
+          "enum": ["AVAILABLE", "RESTING", "EMERGENCY_ONLY", "UNAVAILABLE"],
+          "description": "Self-reported availability status."
+        },
+        "lastDonationDate": { "type": "integer", "description": "Epoch milliseconds of last verified or reported donation." },
+        "isEmergencyDonor": { "type": "boolean", "description": "Whether the donor accepts high-priority emergency broadcasts." },
+        "contactPhone": { "type": "string", "description": "Private contact phone number." },
+        "showPhonePublicly": { "type": "boolean", "description": "Whether the donor permits their phone number in public donor listings." },
+        "division": { "type": "string", "description": "Administrative division in Bangladesh." },
+        "district": { "type": "string", "description": "Administrative district in Bangladesh." },
+        "upazila": { "type": "string", "description": "Upazila or Thana." },
+        "area": { "type": "string", "description": "Local neighborhood or area." },
+        "city": { "type": "string", "description": "City or district label." },
+        "verificationStatus": {
+          "type": "string",
+          "enum": ["UNVERIFIED", "PENDING", "VERIFIED", "REJECTED"],
+          "description": "Server-controlled verification status."
+        },
+        "role": {
+          "type": "string",
+          "enum": ["USER", "ORG_ADMIN", "SUPER_ADMIN"],
+          "description": "Server-controlled authorization role."
+        },
+        "organizationId": { "type": "string", "description": "Optional affiliated organization ID." },
+        "donationCount": { "type": "integer", "description": "Server-controlled count of verified donations." },
+        "badges": { "type": "array", "description": "Earned milestone badge identifiers." },
+        "photoUrl": { "type": "string", "description": "Optional profile image URL." },
+        "fcmToken": { "type": "string", "description": "Firebase Cloud Messaging device token." },
+        "createdAt": { "type": "integer", "description": "Creation timestamp in epoch ms." },
+        "updatedAt": { "type": "integer", "description": "Last update timestamp in epoch ms." }
+      },
+      "required": [
+        "uid",
+        "name",
+        "email",
+        "bloodGroup",
+        "isDonor",
+        "donorAvailability",
+        "contactPhone",
+        "showPhonePublicly",
+        "verificationStatus",
+        "role",
+        "donationCount",
+        "createdAt"
+      ]
+    },
+    "PublicDonor": {
+      "title": "PublicDonor",
+      "description": "Sanitized public donor discovery document containing only non-sensitive location and availability fields.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Donor UID matching /users/{uid}." },
+        "name": { "type": "string", "description": "Donor display name." },
+        "bloodGroup": {
+          "type": "string",
+          "enum": ["A_POSITIVE", "A_NEGATIVE", "B_POSITIVE", "B_NEGATIVE", "O_POSITIVE", "O_NEGATIVE", "AB_POSITIVE", "AB_NEGATIVE"]
+        },
+        "availability": {
+          "type": "string",
+          "enum": ["AVAILABLE", "RESTING", "EMERGENCY_ONLY", "UNAVAILABLE"]
+        },
+        "division": { "type": "string", "description": "Division for text-based location search." },
+        "district": { "type": "string", "description": "District for text-based location search." },
+        "upazila": { "type": "string", "description": "Upazila/Thana for text-based location search." },
+        "area": { "type": "string", "description": "Area/locality for text-based location search." },
+        "generalLocation": { "type": "string", "description": "Formatted division/district/upazila/area summary." },
+        "isDonor": { "type": "boolean", "description": "Must be true to appear in donor searches." },
+        "isEmergencyDonor": { "type": "boolean", "description": "Available for urgent requests." },
+        "contactPhone": { "type": "string", "description": "Sanitized phone (empty string unless showPhonePublicly is enabled)." },
+        "verificationStatus": {
+          "type": "string",
+          "enum": ["UNVERIFIED", "PENDING", "VERIFIED", "REJECTED"]
+        },
+        "donationCount": { "type": "integer" },
+        "lastDonationDate": { "type": "integer" },
+        "updatedAt": { "type": "integer" }
+      },
+      "required": [
+        "uid",
+        "name",
+        "bloodGroup",
+        "availability",
+        "division",
+        "district",
+        "upazila",
+        "area",
+        "isDonor",
+        "verificationStatus",
+        "donationCount"
+      ]
+    },
+    "BloodRequest": {
+      "title": "BloodRequest",
+      "description": "Emergency or scheduled blood request posted by an authenticated user.",
+      "type": "object",
+      "properties": {
+        "requesterUid": { "type": "string", "description": "UID of the user who created the request." },
+        "requesterName": { "type": "string", "description": "Name of the requester." },
+        "patientName": { "type": "string", "description": "Name of the patient." },
+        "patientAge": { "type": "integer", "description": "Age of the patient in years." },
+        "bloodGroup": {
+          "type": "string",
+          "enum": ["A_POSITIVE", "A_NEGATIVE", "B_POSITIVE", "B_NEGATIVE", "O_POSITIVE", "O_NEGATIVE", "AB_POSITIVE", "AB_NEGATIVE"]
+        },
+        "unitsRequired": { "type": "integer", "description": "Number of bags required (1 to 20)." },
+        "hospitalName": { "type": "string", "description": "Hospital or clinic name." },
+        "hospitalAddress": { "type": "string", "description": "Hospital address details." },
+        "division": { "type": "string", "description": "Division of the hospital." },
+        "district": { "type": "string", "description": "District of the hospital." },
+        "upazila": { "type": "string", "description": "Upazila of the hospital." },
+        "area": { "type": "string", "description": "Area of the hospital." },
+        "city": { "type": "string", "description": "City/District name." },
+        "urgency": {
+          "type": "string",
+          "enum": ["STANDARD", "HIGH", "CRITICAL_EMERGENCY"]
+        },
+        "status": {
+          "type": "string",
+          "enum": ["PENDING", "DONOR_RESPONDED", "ACCEPTED", "FULFILLED", "CANCELLED", "EXPIRED"]
+        },
+        "contactPhone": { "type": "string", "description": "Contact phone for the request." },
+        "medicalReason": { "type": "string", "description": "Clinical indication for transfusion." },
+        "acceptedDonorUid": { "type": "string", "description": "UID of the responding donor." },
+        "acceptedDonorName": { "type": "string", "description": "Name of the responding donor." },
+        "isEmergencyBroadcast": { "type": "boolean" },
+        "createdAt": { "type": "integer" },
+        "updatedAt": { "type": "integer" },
+        "expiresAt": { "type": "integer" }
+      },
+      "required": [
+        "requesterUid",
+        "requesterName",
+        "patientName",
+        "patientAge",
+        "bloodGroup",
+        "unitsRequired",
+        "hospitalName",
+        "division",
+        "district",
+        "city",
+        "urgency",
+        "status",
+        "contactPhone",
+        "createdAt"
+      ]
+    },
+    "DonationRecord": {
+      "title": "DonationRecord",
+      "description": "Official verified blood donation record created only by authorized organizations or admins.",
+      "type": "object",
+      "properties": {
+        "donorUid": { "type": "string" },
+        "donorName": { "type": "string" },
+        "bloodGroup": { "type": "string" },
+        "requestId": { "type": "string" },
+        "hospitalName": { "type": "string" },
+        "city": { "type": "string" },
+        "donationDate": { "type": "integer" },
+        "verifiedByOrgId": { "type": "string" },
+        "verifiedByOrgName": { "type": "string" },
+        "unitsDonated": { "type": "integer" },
+        "certificateCode": { "type": "string" }
+      },
+      "required": [
+        "donorUid",
+        "donorName",
+        "bloodGroup",
+        "hospitalName",
+        "donationDate",
+        "unitsDonated"
+      ]
+    },
+    "Organization": {
+      "title": "Organization",
+      "description": "Blood bank, hospital, or voluntary blood donation organization.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "registrationNumber": { "type": "string" },
+        "description": { "type": "string" },
+        "headquartersCity": { "type": "string" },
+        "division": { "type": "string" },
+        "district": { "type": "string" },
+        "contactEmail": { "type": "string" },
+        "contactPhone": { "type": "string" },
+        "isVerified": { "type": "boolean" },
+        "adminUids": { "type": "array" },
+        "memberCount": { "type": "integer" },
+        "totalBagsCollected": { "type": "integer" },
+        "createdAt": { "type": "integer" }
+      },
+      "required": [
+        "name",
+        "registrationNumber",
+        "headquartersCity",
+        "contactPhone",
+        "isVerified",
+        "adminUids",
+        "createdAt"
+      ]
+    },
+    "Campaign": {
+      "title": "Campaign",
+      "description": "Voluntary blood donation camp or drive organized by a verified organization.",
+      "type": "object",
+      "properties": {
+        "organizationId": { "type": "string" },
+        "organizationName": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "location": { "type": "string" },
+        "city": { "type": "string" },
+        "startDate": { "type": "integer" },
+        "endDate": { "type": "integer" },
+        "targetBags": { "type": "integer" },
+        "collectedBags": { "type": "integer" },
+        "contactPhone": { "type": "string" },
+        "isActive": { "type": "boolean" }
+      },
+      "required": [
+        "organizationId",
+        "organizationName",
+        "title",
+        "location",
+        "city",
+        "targetBags",
+        "collectedBags",
+        "isActive"
+      ]
+    },
+    "Conversation": {
+      "title": "Conversation",
+      "description": "1-to-1 private chat metadata isolated strictly to the two participants.",
+      "type": "object",
+      "properties": {
+        "participants": { "type": "array", "description": "Two participant UIDs." },
+        "participantNames": { "type": "object" },
+        "participantBloodGroups": { "type": "object" },
+        "lastMessage": { "type": "string" },
+        "lastMessageTimestamp": { "type": "integer" },
+        "requestId": { "type": "string" }
+      },
+      "required": [
+        "participants",
+        "lastMessage",
+        "lastMessageTimestamp"
+      ]
+    },
+    "ChatMessage": {
+      "title": "ChatMessage",
+      "description": "Immutable chat message within a 1-to-1 conversation.",
+      "type": "object",
+      "properties": {
+        "conversationId": { "type": "string" },
+        "senderUid": { "type": "string" },
+        "senderName": { "type": "string" },
+        "text": { "type": "string" },
+        "timestamp": { "type": "integer" }
+      },
+      "required": [
+        "conversationId",
+        "senderUid",
+        "senderName",
+        "text",
+        "timestamp"
+      ]
+    },
+    "VerificationRequest": {
+      "title": "VerificationRequest",
+      "description": "Verification submission for donor or organization review by system admins.",
+      "type": "object",
+      "properties": {
+        "applicantUid": { "type": "string" },
+        "name": { "type": "string" },
+        "type": { "type": "string", "enum": ["DONOR", "ORGANIZATION"] },
+        "documents": { "type": "array" },
+        "status": { "type": "string", "enum": ["PENDING", "APPROVED", "REJECTED"] },
+        "submittedAt": { "type": "integer" }
+      },
+      "required": [
+        "applicantUid",
+        "name",
+        "type",
+        "status",
+        "submittedAt"
+      ]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Immutable security audit trail entry written by admins or Cloud Functions.",
+      "type": "object",
+      "properties": {
+        "actorUid": { "type": "string" },
+        "actorEmail": { "type": "string" },
+        "action": { "type": "string" },
+        "targetId": { "type": "string" },
+        "targetType": { "type": "string" },
+        "details": { "type": "string" },
+        "timestamp": { "type": "integer" }
+      },
+      "required": [
+        "actorUid",
+        "action",
+        "targetId",
+        "targetType",
+        "timestamp"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Private user profile documents restricted to the owner and admins."
+    },
+    "/public_donors/{donorUid}": {
+      "schema": { "$ref": "#/entities/PublicDonor" },
+      "description": "Sanitized public donor profiles for blood group and division/district/upazila/area discovery."
+    },
+    "/blood_requests/{requestId}": {
+      "schema": { "$ref": "#/entities/BloodRequest" },
+      "description": "Emergency and scheduled blood requests with validated status transitions."
+    },
+    "/donations/{donationId}": {
+      "schema": { "$ref": "#/entities/DonationRecord" },
+      "description": "Verified donation records managed by admins and verified organizations."
+    },
+    "/organizations/{orgId}": {
+      "schema": { "$ref": "#/entities/Organization" },
+      "description": "Registered voluntary blood organizations and blood banks."
+    },
+    "/campaigns/{campaignId}": {
+      "schema": { "$ref": "#/entities/Campaign" },
+      "description": "Blood donation campaigns and drives."
+    },
+    "/conversations/{convId}": {
+      "schema": { "$ref": "#/entities/Conversation" },
+      "description": "1-to-1 private chat sessions between requester and donor."
+    },
+    "/conversations/{convId}/messages/{messageId}": {
+      "schema": { "$ref": "#/entities/ChatMessage" },
+      "description": "Messages inside a 1-to-1 conversation."
+    },
+    "/verification_requests/{taskId}": {
+      "schema": { "$ref": "#/entities/VerificationRequest" },
+      "description": "Queue of pending donor and organization verification requests."
+    },
+    "/audit_logs/{logId}": {
+      "schema": { "$ref": "#/entities/AuditLog" },
+      "description": "Immutable administrative and security audit trail."
+    }
+  }
+}

@@ -1,7 +1,9 @@
 package com.example.ui.screens.profile
 
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -18,33 +20,28 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.Badge
-import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Logout
-import androidx.compose.material.icons.filled.MedicalServices
 import androidx.compose.material.icons.filled.MilitaryTech
-import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Security
-import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Verified
-import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -60,6 +57,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -67,18 +65,17 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.domain.LocationHelper
 import com.example.model.BloodGroup
-import com.example.model.DonationRecord
 import com.example.model.DonorAvailability
 import com.example.model.DonorMilestoneBadge
-import com.example.model.UserProfile
 import com.example.model.VerificationStatus
 import com.example.ui.components.BloodGroupBadge
 import com.example.ui.theme.BloodBurgundy
@@ -86,7 +83,6 @@ import com.example.ui.theme.BloodGold
 import com.example.ui.theme.BloodRed
 import com.example.ui.theme.BloodSuccessContainer
 import com.example.ui.theme.BloodSuccessGreen
-import com.example.ui.theme.EmergencyRed
 import com.example.ui.viewmodel.AuthViewModel
 import com.example.ui.viewmodel.BloodViewModel
 import java.text.SimpleDateFormat
@@ -105,10 +101,25 @@ fun MyProfileScreen(
     onSignedOut: () -> Unit
 ) {
     val currentUserProfile by authViewModel.currentUserProfile.collectAsState()
+    val authUiState by authViewModel.uiState.collectAsState()
     var showEditDialog by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
+    var showVerificationDialog by remember { mutableStateOf(false) }
 
     val snackbarHostState = remember { SnackbarHostState() }
+
+    LaunchedEffect(authUiState.successMessage) {
+        authUiState.successMessage?.let {
+            snackbarHostState.showSnackbar(it)
+            authViewModel.clearMessages()
+        }
+    }
+    LaunchedEffect(authUiState.errorMessage) {
+        authUiState.errorMessage?.let {
+            snackbarHostState.showSnackbar(it)
+            authViewModel.clearMessages()
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -258,38 +269,6 @@ fun MyProfileScreen(
                     }
                 }
 
-                // Features Overview Card
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(18.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
-                ) {
-                    Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                        Text(
-                            text = "রক্তসেতু একাউন্টের সুবিধাসমূহ",
-                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
-                        )
-
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Favorite, contentDescription = null, tint = BloodRed, modifier = Modifier.size(20.dp))
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Text("জরুরী রক্তের আবেদন প্রকাশ ও পুশ নোটিফিকেশন ব্রডকাস্ট", style = MaterialTheme.typography.bodySmall)
-                        }
-
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.MilitaryTech, contentDescription = null, tint = BloodGold, modifier = Modifier.size(20.dp))
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Text("ডিজিটাল ডোনার আইডি ও রক্তদানের মাইলস্টোন ব্যাজ অর্জন", style = MaterialTheme.typography.bodySmall)
-                        }
-
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Security, contentDescription = null, tint = BloodSuccessGreen, modifier = Modifier.size(20.dp))
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Text("নিরাপদ ১-টু-১ চ্যাট ও গোপনীয়তা সুরক্ষা ফিল্টার", style = MaterialTheme.typography.bodySmall)
-                        }
-                    }
-                }
-
                 // Quick Links
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -354,6 +333,14 @@ fun MyProfileScreen(
         ) {
             Spacer(modifier = Modifier.height(4.dp))
 
+            val formattedLoc = LocationHelper.formatGeneralLocation(
+                division = profile.location.division,
+                district = profile.location.district,
+                upazila = profile.location.upazila,
+                area = profile.location.area,
+                city = profile.location.city
+            )
+
             // Digital Blood Donor Card (Hero Card)
             Card(
                 modifier = Modifier
@@ -414,7 +401,7 @@ fun MyProfileScreen(
                             Icon(Icons.Default.LocationOn, contentDescription = null, tint = Color.White.copy(alpha = 0.8f), modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(4.dp))
                             Text(
-                                text = "${profile.location.city}, ${profile.location.area}",
+                                text = formattedLoc,
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = Color.White.copy(alpha = 0.85f)
                             )
@@ -428,7 +415,7 @@ fun MyProfileScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Column {
-                                Text("Total Donations", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.7f))
+                                Text("Verified Donations", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.7f))
                                 Text("${profile.donationCount} Bags Given", style = MaterialTheme.typography.titleSmall.copy(color = BloodGold, fontWeight = FontWeight.Bold))
                             }
 
@@ -450,6 +437,40 @@ fun MyProfileScreen(
                                     )
                                 }
                             }
+                        }
+                    }
+                }
+            }
+
+            // Verification Explanation & Submission Card
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f))
+            ) {
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Info, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "About Donor Verification (${profile.verificationStatus.name})",
+                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
+                        )
+                    }
+                    Text(
+                        text = "The VERIFIED badge indicates that a RoktoSetu administrator or partner blood bank has reviewed your blood grouping report. It does NOT replace clinical crossmatching before a blood transfusion.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    if (profile.verificationStatus == VerificationStatus.UNVERIFIED ||
+                        profile.verificationStatus == VerificationStatus.REJECTED
+                    ) {
+                        OutlinedButton(
+                            onClick = { showVerificationDialog = true },
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.testTag("btn_request_donor_verification")
+                        ) {
+                            Text("Submit Blood Group Report for Admin Verification", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         }
                     }
                 }
@@ -489,21 +510,33 @@ fun MyProfileScreen(
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
             ) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                    Text("Donor Settings & Privacy", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold))
+                    Text("Donor Availability & Privacy", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold))
 
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Available for Blood Calls", fontWeight = FontWeight.SemiBold)
-                            Text("Turn off when you are unwell or resting", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        Switch(
-                            checked = profile.donorAvailability == DonorAvailability.AVAILABLE,
-                            onCheckedChange = { authViewModel.toggleDonorAvailability(it) }
+                    Text(
+                        text = "Select your current availability status:",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        val options = listOf(
+                            DonorAvailability.AVAILABLE to "Available (উপলব্ধ)",
+                            DonorAvailability.RESTING to "Resting (বিশ্রাম)",
+                            DonorAvailability.EMERGENCY_ONLY to "Emergency Only",
+                            DonorAvailability.UNAVAILABLE to "Unavailable (অনুপলব্ধ)"
                         )
+                        items(options) { (status, label) ->
+                            FilterChip(
+                                selected = profile.donorAvailability == status,
+                                onClick = { authViewModel.setDonorAvailability(status) },
+                                label = { Text(label, fontWeight = FontWeight.Bold, fontSize = 12.sp) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = if (status == DonorAvailability.AVAILABLE) BloodSuccessGreen else MaterialTheme.colorScheme.primary,
+                                    selectedLabelColor = Color.White
+                                ),
+                                modifier = Modifier.testTag("chip_avail_${status.name}")
+                            )
+                        }
                     }
 
                     Row(
@@ -512,8 +545,8 @@ fun MyProfileScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
-                            Text("Show Phone Publicly in Emergency", fontWeight = FontWeight.SemiBold)
-                            Text("Allow requesters to call you directly", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text("Show Phone Publicly in Directory", fontWeight = FontWeight.SemiBold)
+                            Text("When off, requesters can only contact you via secure in-app chat", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         Switch(
                             checked = profile.showPhonePublicly,
@@ -530,7 +563,7 @@ fun MyProfileScreen(
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text("Emergency High-Priority Alerts", fontWeight = FontWeight.SemiBold)
-                            Text("Receive push notifications for critical matching patients", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text("Receive push notifications for critical matching patients in your district", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         Switch(
                             checked = profile.isEmergencyDonor,
@@ -578,6 +611,70 @@ fun MyProfileScreen(
             Spacer(modifier = Modifier.height(24.dp))
         }
 
+        if (showVerificationDialog) {
+            val context = LocalContext.current
+            var docRef by remember { mutableStateOf("Lab_Blood_Group_Report.pdf") }
+            var selectedFileUri by remember { mutableStateOf<Uri?>(null) }
+            val filePickerLauncher = rememberLauncherForActivityResult(
+                contract = ActivityResultContracts.GetContent()
+            ) { uri: Uri? ->
+                if (uri != null) {
+                    selectedFileUri = uri
+                    docRef = uri.lastPathSegment ?: "Uploaded_Lab_Report"
+                }
+            }
+
+            AlertDialog(
+                onDismissRequest = { showVerificationDialog = false },
+                title = { Text("Request Donor Verification", fontWeight = FontWeight.Bold) },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            "Upload your pathology lab blood grouping report (PDF, JPG, PNG, or WEBP up to 10 MB) or provide a document reference for administrator review.",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        OutlinedButton(
+                            onClick = { filePickerLauncher.launch("*/*") },
+                            modifier = Modifier.fillMaxWidth().testTag("btn_pick_verification_file")
+                        ) {
+                            Text(
+                                if (selectedFileUri != null) "Selected: $docRef"
+                                else "Choose Report File (PDF / Image)"
+                            )
+                        }
+                        OutlinedTextField(
+                            value = docRef,
+                            onValueChange = { docRef = it },
+                            label = { Text("Document Reference / Lab Report") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            if (selectedFileUri != null || docRef.isNotBlank()) {
+                                authViewModel.uploadAndSubmitVerificationRequest(
+                                    context = context,
+                                    fileUri = selectedFileUri,
+                                    fallbackDocumentRef = docRef.trim()
+                                )
+                                showVerificationDialog = false
+                            }
+                        }
+                    ) {
+                        Text("Upload & Submit")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showVerificationDialog = false }) {
+                        Text("Cancel")
+                    }
+                }
+            )
+        }
+
         // Delete Account Confirmation Dialog
         if (showDeleteConfirm) {
             AlertDialog(
@@ -585,7 +682,7 @@ fun MyProfileScreen(
                 icon = { Icon(Icons.Default.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
                 title = { Text("Delete Account?", fontWeight = FontWeight.Bold) },
                 text = {
-                    Text("Are you sure you want to permanently delete your RoktoSetu account? Your donor profile, emergency availability, and cached records will be removed.")
+                    Text("Are you sure you want to permanently delete your RoktoSetu account? Your donor profile, public listing, notifications, and cached records will be removed.")
                 },
                 confirmButton = {
                     Button(
@@ -606,18 +703,65 @@ fun MyProfileScreen(
             )
         }
 
+        // Re-authentication Dialog when Firebase Auth requires recent login before account deletion
+        if (authUiState.requiresReauthForDelete) {
+            var reauthPass by remember { mutableStateOf("") }
+            AlertDialog(
+                onDismissRequest = { authViewModel.dismissReauthDialog() },
+                icon = { Icon(Icons.Default.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
+                title = { Text(androidx.compose.ui.res.stringResource(com.example.R.string.auth_reauth_title), fontWeight = FontWeight.Bold) },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text(
+                            text = androidx.compose.ui.res.stringResource(com.example.R.string.auth_reauth_message),
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        OutlinedTextField(
+                            value = reauthPass,
+                            onValueChange = { reauthPass = it },
+                            label = { Text(androidx.compose.ui.res.stringResource(com.example.R.string.auth_reauth_password_label)) },
+                            singleLine = true,
+                            visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                            modifier = Modifier.fillMaxWidth().testTag("input_reauth_password")
+                        )
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            if (reauthPass.isNotBlank()) {
+                                authViewModel.deleteAccount(reauthPassword = reauthPass, onDeleted = onSignedOut)
+                            }
+                        },
+                        enabled = reauthPass.isNotBlank() && !authUiState.isLoading,
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                        modifier = Modifier.testTag("btn_confirm_reauth_delete")
+                    ) {
+                        Text(androidx.compose.ui.res.stringResource(com.example.R.string.auth_reauth_confirm_btn))
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { authViewModel.dismissReauthDialog() }) {
+                        Text("Cancel")
+                    }
+                }
+            )
+        }
+
         // Edit Profile Dialog
         if (showEditDialog) {
             var newName by remember { mutableStateOf(profile.name) }
             var newPhone by remember { mutableStateOf(profile.contactPhone) }
-            var newCity by remember { mutableStateOf(profile.location.city) }
+            var newDivision by remember { mutableStateOf(profile.location.division.ifBlank { "Dhaka" }) }
+            var newDistrict by remember { mutableStateOf(profile.location.district.ifBlank { profile.location.city.ifBlank { "Dhaka" } }) }
+            var newUpazila by remember { mutableStateOf(profile.location.upazila) }
             var newArea by remember { mutableStateOf(profile.location.area) }
 
             AlertDialog(
                 onDismissRequest = { showEditDialog = false },
                 title = { Text("Edit Profile Details", fontWeight = FontWeight.Bold) },
                 text = {
-                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedTextField(
                             value = newName,
                             onValueChange = { newName = it },
@@ -631,15 +775,27 @@ fun MyProfileScreen(
                             singleLine = true
                         )
                         OutlinedTextField(
-                            value = newCity,
-                            onValueChange = { newCity = it },
-                            label = { Text("City / District") },
+                            value = newDivision,
+                            onValueChange = { newDivision = it },
+                            label = { Text("Division (বিভাগ)") },
+                            singleLine = true
+                        )
+                        OutlinedTextField(
+                            value = newDistrict,
+                            onValueChange = { newDistrict = it },
+                            label = { Text("District (জেলা)") },
+                            singleLine = true
+                        )
+                        OutlinedTextField(
+                            value = newUpazila,
+                            onValueChange = { newUpazila = it },
+                            label = { Text("Upazila / Thana (উপজেলা/থানা)") },
                             singleLine = true
                         )
                         OutlinedTextField(
                             value = newArea,
                             onValueChange = { newArea = it },
-                            label = { Text("Area / Address") },
+                            label = { Text("Area / Locality (এলাকা)") },
                             singleLine = true
                         )
                     }
@@ -650,7 +806,13 @@ fun MyProfileScreen(
                             val updated = profile.copy(
                                 name = newName.trim(),
                                 contactPhone = newPhone.trim(),
-                                location = profile.location.copy(city = newCity.trim(), area = newArea.trim())
+                                location = profile.location.copy(
+                                    division = newDivision.trim().ifBlank { "Dhaka" },
+                                    district = newDistrict.trim().ifBlank { "Dhaka" },
+                                    upazila = newUpazila.trim(),
+                                    city = newDistrict.trim().ifBlank { "Dhaka" },
+                                    area = newArea.trim()
+                                )
                             )
                             authViewModel.updateProfile(updated)
                             showEditDialog = false
@@ -787,7 +949,7 @@ fun DonationHistoryScreen(
                             Spacer(modifier = Modifier.width(12.dp))
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(record.hospitalName, style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold))
-                                Text("Date: ${sdf.format(Date(record.donationDate))} • ${record.city}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text("Date: ${sdf.format(Date(record.donationDate))} • ${record.district.ifBlank { record.city }}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 Text("Verified by: ${record.verifiedByOrgName}", style = MaterialTheme.typography.labelSmall, color = BloodSuccessGreen, fontWeight = FontWeight.SemiBold)
                             }
                             Surface(color = BloodSuccessContainer, shape = RoundedCornerShape(8.dp)) {
