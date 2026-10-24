@@ -1,13 +1,11 @@
 package com.example.data.firebase
 
 import android.content.Context
-import android.net.Uri
-import android.provider.OpenableColumns
 import android.util.Log
 import com.example.R
 import com.example.domain.BloodCompatibilityHelper
 import com.example.domain.LocationHelper
-import com.example.model.AuditLogEntry
+import com.example.model.AccountStatus
 import com.example.model.BloodGroup
 import com.example.model.BloodRequest
 import com.example.model.Campaign
@@ -15,25 +13,22 @@ import com.example.model.ChatMessage
 import com.example.model.Conversation
 import com.example.model.DonationRecord
 import com.example.model.DonorAvailability
+import com.example.model.LocationInfo
 import com.example.model.Organization
 import com.example.model.PublicDonorView
 import com.example.model.RequestStatus
 import com.example.model.RequestUrgency
-import com.example.model.SystemMetrics
+import com.example.model.UserProfile
+import com.example.model.UserRole
 import com.example.model.VerificationStatus
-import com.example.model.VerificationTask
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.firestore.Query
-import com.google.firebase.storage.FirebaseStorage
-import com.google.firebase.storage.StorageMetadata
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.callbackFlow
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import org.json.JSONArray
 import org.json.JSONObject
@@ -46,6 +41,12 @@ enum class OperationType(val value: String) {
     GET("get"),
     WRITE("write"),
 }
+
+data class PaginatedResult<T>(
+    val items: List<T>,
+    val lastSnapshot: DocumentSnapshot?,
+    val hasMore: Boolean
+)
 
 /**
  * Standardized structured JSON error logger for Firestore security rule and query diagnostics.
@@ -89,18 +90,21 @@ fun handleFirestoreError(exception: Exception, operationType: OperationType, pat
  * Production Firestore Data Layer Service.
  *
  * - Always connects to the provisioned custom database (`R.string.firestore_database_id`).
- * - Never injects hardcoded or simulated sample donors into production searches.
- * - Uses atomic Firestore transactions for blood request acceptance and donation verification.
- * - Logs all Firestore errors through `handleFirestoreError`.
+ * - Supports server-side query filters, `area_lower` prefix search, and cursor pagination (25 per page).
+ * - Uses atomic Firestore transactions for blood request acceptance.
  */
 class FirestoreService(
-    private val db: FirebaseFirestore
+    internal val db: FirebaseFirestore
 ) {
     constructor(context: Context) : this(
         FirebaseFirestore.getInstance(
             context.applicationContext.getString(R.string.firestore_database_id)
         )
     )
+
+    companion object {
+        const val DEFAULT_PAGE_SIZE = 25L
+    }
 
     // =========================================================================
     // 1. Emergency Blood Requests (/blood_requests)
@@ -112,6 +116,7 @@ class FirestoreService(
         districtFilter: String? = null,
         upazilaFilter: String? = null,
         areaQuery: String? = null,
+        pageSize: Long = 100L,
         onError: ((String) -> Unit)? = null
     ): Flow<List<BloodRequest>> = callbackFlow {
         val currentUser = try {
@@ -126,17 +131,17 @@ class FirestoreService(
         }
 
         val path = "blood_requests"
-        val query = db.collection(path)
-            .whereIn(
-                "status",
-                listOf(
-                    RequestStatus.PENDING.name,
-                    RequestStatus.DONOR_RESPONDED.name,
-                    RequestStatus.ACCEPTED.name,
-                    RequestStatus.FULFILLED.name
-                )
-            )
-            .limit(100)
+        var query: Query = db.collection(path)
+        if (!districtFilter.isNullOrBlank()) {
+            query = query.whereEqualTo("district", districtFilter.trim())
+        }
+        if (!areaQuery.isNullOrBlank() && areaQuery.trim().length >= 2 && districtFilter.isNullOrBlank()) {
+            val cleanArea = areaQuery.trim().lowercase()
+            query = query
+                .whereGreaterThanOrEqualTo("area_lower", cleanArea)
+                .whereLessThanOrEqualTo("area_lower", cleanArea + "\uf8ff")
+        }
+        query = query.limit(pageSize)
 
         val listener = query.addSnapshotListener { snapshot, error ->
             if (error != null) {
@@ -151,6 +156,7 @@ class FirestoreService(
                 parseBloodRequest(doc)
             }?.filter { req ->
                 val isNotExpired = req.status != RequestStatus.EXPIRED &&
+                    req.status != RequestStatus.CANCELLED &&
                     (req.expiresAt <= 0L || req.expiresAt > now || req.status != RequestStatus.PENDING)
                 val matchesBlood = filterBloodGroup == null || req.bloodGroup == filterBloodGroup
                 val matchesLoc = LocationHelper.matchesLocationFilter(
@@ -175,24 +181,77 @@ class FirestoreService(
         awaitClose { listener.remove() }
     }
 
+    /**
+     * Fetches a paginated page (default 25 items) of blood requests using server-side filters
+     * and `startAfter(lastDocument)` cursor pagination.
+     */
+    suspend fun fetchBloodRequestsPage(
+        filterBloodGroup: BloodGroup? = null,
+        divisionFilter: String? = null,
+        districtFilter: String? = null,
+        upazilaFilter: String? = null,
+        areaQuery: String? = null,
+        lastSnapshot: DocumentSnapshot? = null,
+        pageSize: Long = DEFAULT_PAGE_SIZE
+    ): Resource<PaginatedResult<BloodRequest>> {
+        val path = "blood_requests"
+        return try {
+            var query: Query = db.collection(path)
+            if (filterBloodGroup != null) {
+                query = query.whereEqualTo("bloodGroup", filterBloodGroup.name)
+            }
+            if (!divisionFilter.isNullOrBlank()) {
+                query = query.whereEqualTo("division", divisionFilter.trim())
+            }
+            if (!districtFilter.isNullOrBlank()) {
+                query = query.whereEqualTo("district", districtFilter.trim())
+            }
+            if (!upazilaFilter.isNullOrBlank()) {
+                query = query.whereEqualTo("upazila", upazilaFilter.trim())
+            }
+            if (!areaQuery.isNullOrBlank()) {
+                val q = areaQuery.trim().lowercase()
+                query = query
+                    .whereGreaterThanOrEqualTo("area_lower", q)
+                    .whereLessThanOrEqualTo("area_lower", q + "\uf8ff")
+            }
+            if (lastSnapshot != null) {
+                query = query.startAfter(lastSnapshot)
+            }
+            val snap = query.limit(pageSize).get().await()
+            val docs = snap.documents
+            val items = docs.mapNotNull { parseBloodRequest(it) }
+            Resource.Success(
+                PaginatedResult(
+                    items = items,
+                    lastSnapshot = docs.lastOrNull(),
+                    hasMore = docs.size.toLong() >= pageSize
+                )
+            )
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.LIST, path)
+            Resource.Error(FirebaseSecurityHelper.mapExceptionToMessage(e), e)
+        }
+    }
+
     suspend fun createBloodRequest(request: BloodRequest): Resource<String> {
         val currentUid = try {
             FirebaseAuth.getInstance().currentUser?.uid
         } catch (_: Exception) {
             null
-        } ?: return Resource.Error("You must be signed in to post a blood request.")
+        } ?: return Resource.Error("রক্তের অনুরোধ জানাতে অনুগ্রহ করে লগইন করুন।")
 
         if (request.patientName.trim().length < 2) {
-            return Resource.Error("Patient name must be at least 2 characters.")
+            return Resource.Error("রোগীর নাম কমপক্ষে ২ অক্ষরের হতে হবে।")
         }
         if (request.hospitalName.trim().length < 2) {
-            return Resource.Error("Hospital or clinic name is required.")
+            return Resource.Error("হাসপাতাল বা ক্লিনিকের নাম আবশ্যক।")
         }
-        if (request.contactPhone.trim().length < 6) {
-            return Resource.Error("A valid emergency contact phone number is required.")
+        if (!FirebaseSecurityHelper.isValidPhoneNumber(request.contactPhone)) {
+            return Resource.Error("সঠিক বাংলাদেশী মোবাইল নম্বর দিন (যেমন: 017XXXXXXXX)।")
         }
-        if (request.unitsRequired !in 1..20) {
-            return Resource.Error("Required blood units must be between 1 and 20 bags.")
+        if (request.unitsRequired !in 1..15) {
+            return Resource.Error("প্রয়োজনীয় রক্তের ব্যাগ ১ থেকে ১৫ এর মধ্যে হতে হবে।")
         }
 
         val docRef = if (request.id.isNotBlank()) {
@@ -214,6 +273,7 @@ class FirestoreService(
             division = effectiveDivision,
             district = effectiveDistrict,
             city = effectiveDistrict,
+            contactPhone = FirebaseSecurityHelper.normalizePhoneNumber(request.contactPhone),
             acceptedDonorUid = null,
             acceptedDonorName = null,
             createdAt = now,
@@ -231,8 +291,8 @@ class FirestoreService(
     }
 
     /**
-     * Atomically commits a donor to a PENDING blood request using a Firestore Transaction.
-     * Prevents race conditions, duplicate acceptances, self-acceptance, and incompatible blood types.
+     * Atomically commits a donor to an open/pending blood request using a single client-side
+     * Firestore Transaction aligned with `/firestore.rules`.
      */
     suspend fun acceptBloodRequest(
         requestId: String,
@@ -246,50 +306,59 @@ class FirestoreService(
                 val snapshot = transaction.get(docRef)
                 if (!snapshot.exists()) {
                     throw FirebaseFirestoreException(
-                        "Blood request no longer exists.",
+                        "রক্তের অনুরোধটি আর বিদ্যমান নেই।",
                         FirebaseFirestoreException.Code.NOT_FOUND
                     )
                 }
 
-                val currentStatus = snapshot.getString("status") ?: "PENDING"
-                val requesterUid = snapshot.getString("requesterUid") ?: ""
+                val currentStatus = snapshot.getString("status") ?: "OPEN"
+                val requesterUid = snapshot.getString("requesterUid")
+                    ?: snapshot.getString("requesterId")
+                    ?: ""
                 val requestedBloodStr = snapshot.getString("bloodGroup") ?: "O_POSITIVE"
                 val requestedBlood = BloodGroup.fromDisplay(requestedBloodStr)
 
                 if (requesterUid == donorUid) {
-                    throw IllegalStateException("You cannot accept your own blood request.")
+                    throw IllegalStateException("আপনি নিজের রক্তের অনুরোধ নিজে গ্রহণ করতে পারবেন না।")
                 }
 
-                if (currentStatus != RequestStatus.PENDING.name) {
+                if (currentStatus !in listOf(RequestStatus.PENDING.name, "OPEN", RequestStatus.DONOR_RESPONDED.name)) {
                     val alreadyAssigned = snapshot.getString("acceptedDonorUid")
                     if (alreadyAssigned == donorUid) {
                         return@runTransaction
                     }
-                    throw IllegalStateException("This request has already been responded to or closed (Status: $currentStatus).")
+                    throw IllegalStateException("এই অনুরোধটিতে ইতিমধ্যে অন্য রক্তদাতা সাড়া দিয়েছেন বা এটি সম্পন্ন হয়েছে।")
                 }
 
                 if (donorBloodGroup != null && !BloodCompatibilityHelper.isCompatible(donorBloodGroup, requestedBlood)) {
                     throw IllegalStateException(
-                        "Your blood group (${donorBloodGroup.display}) is not medically compatible with the patient's group (${requestedBlood.display})."
+                        "আপনার রক্তের গ্রুপ (${donorBloodGroup.display}) রোগীর রক্তের গ্রুপের (${requestedBlood.display}) সাথে সামঞ্জস্যপূর্ণ নয়।"
                     )
                 }
 
-                val existingResponders = (snapshot.get("respondedDonorUids") as? List<*>)
+                val existingAccepted = (snapshot.get("respondedDonorUids") as? List<*>)
                     ?.mapNotNull { it as? String }
+                    ?: (snapshot.get("acceptedDonorIds") as? List<*>)
+                        ?.mapNotNull { it as? String }
                     ?: emptyList()
-                val updatedResponders = if (existingResponders.contains(donorUid)) {
-                    existingResponders
-                } else {
-                    (existingResponders + donorUid).take(20)
+                if (existingAccepted.contains(donorUid)) {
+                    return@runTransaction
                 }
+
+                val updatedAccepted = existingAccepted + donorUid
+                val currentPledged = (snapshot.getLong("unitsFulfilled") ?: snapshot.getLong("bagsPledged") ?: 0L).toInt()
+                val unitsRequired = (snapshot.getLong("unitsRequired") ?: snapshot.getLong("bagsNeeded") ?: 1L).toInt()
+                val newPledged = currentPledged + 1
+                val newStatus = if (newPledged >= unitsRequired) RequestStatus.ACCEPTED.name else RequestStatus.DONOR_RESPONDED.name
 
                 transaction.update(
                     docRef,
                     mapOf(
-                        "status" to RequestStatus.ACCEPTED.name,
+                        "status" to newStatus,
                         "acceptedDonorUid" to donorUid,
-                        "acceptedDonorName" to donorName.trim().ifBlank { "Voluntary Donor" },
-                        "respondedDonorUids" to updatedResponders,
+                        "acceptedDonorName" to donorName.trim().ifBlank { "স্বেচ্ছাসেবী রক্তদাতা" },
+                        "respondedDonorUids" to updatedAccepted,
+                        "unitsFulfilled" to newPledged,
                         "updatedAt" to System.currentTimeMillis()
                     )
                 )
@@ -297,13 +366,10 @@ class FirestoreService(
             Resource.Success(Unit)
         } catch (e: Exception) {
             handleFirestoreError(e, OperationType.UPDATE, docRef.path)
-            Resource.Error(e.localizedMessage ?: "Could not accept blood request", e)
+            Resource.Error(e.localizedMessage ?: "রক্তের অনুরোধ গ্রহণ করা যায়নি।", e)
         }
     }
 
-    /**
-     * Updates the status of a blood request after validating the transition.
-     */
     suspend fun updateRequestStatus(requestId: String, newStatus: RequestStatus): Resource<Unit> {
         val docRef = db.collection("blood_requests").document(requestId)
         return try {
@@ -311,25 +377,30 @@ class FirestoreService(
                 val snapshot = transaction.get(docRef)
                 if (!snapshot.exists()) {
                     throw FirebaseFirestoreException(
-                        "Blood request not found.",
+                        "রক্তের অনুরোধটি পাওয়া যায়নি।",
                         FirebaseFirestoreException.Code.NOT_FOUND
                     )
                 }
 
                 val currentStatusStr = snapshot.getString("status") ?: "PENDING"
-                val currentStatus = runCatching { RequestStatus.valueOf(currentStatusStr) }
-                    .getOrDefault(RequestStatus.PENDING)
+                val currentStatus = if (currentStatusStr == "OPEN") {
+                    RequestStatus.PENDING
+                } else {
+                    runCatching { RequestStatus.valueOf(currentStatusStr) }
+                        .getOrDefault(RequestStatus.PENDING)
+                }
 
                 if (currentStatus in listOf(RequestStatus.FULFILLED, RequestStatus.CANCELLED, RequestStatus.EXPIRED)) {
-                    throw IllegalStateException("Cannot modify a request that is already ${currentStatus.display}.")
+                    throw IllegalStateException("ইতিমধ্যে সম্পন্ন বা বাতিল হওয়া অনুরোধ পরিবর্তন করা যাবে না।")
                 }
 
                 if (newStatus == RequestStatus.FULFILLED) {
                     val acceptedDonor = snapshot.getString("acceptedDonorUid")
-                    if (currentStatus !in listOf(RequestStatus.ACCEPTED, RequestStatus.DONOR_RESPONDED) ||
-                        acceptedDonor.isNullOrBlank()
-                    ) {
-                        throw IllegalStateException("A request can only be marked Fulfilled after a donor has responded.")
+                    val responders = (snapshot.get("respondedDonorUids") as? List<*>)
+                        ?: (snapshot.get("acceptedDonorIds") as? List<*>)
+                        ?: emptyList<Any>()
+                    if (acceptedDonor.isNullOrBlank() && responders.isEmpty()) {
+                        throw IllegalStateException("রক্তদাতা সাড়া দেওয়ার পরই কেবল অনুরোধটি সম্পন্ন হিসেবে চিহ্নিত করা যাবে।")
                     }
                 }
 
@@ -344,23 +415,31 @@ class FirestoreService(
             Resource.Success(Unit)
         } catch (e: Exception) {
             handleFirestoreError(e, OperationType.UPDATE, docRef.path)
-            Resource.Error(e.localizedMessage ?: "Failed to update request status", e)
+            Resource.Error(e.localizedMessage ?: "স্ট্যাটাস হালনাগাদ করা যায়নি।", e)
         }
     }
 
-    private fun parseBloodRequest(doc: DocumentSnapshot): BloodRequest? {
+    internal fun parseBloodRequest(doc: DocumentSnapshot): BloodRequest? {
         return try {
             val district = doc.getString("district") ?: doc.getString("city") ?: "Dhaka"
             val division = doc.getString("division") ?: LocationHelper.inferDivisionForDistrict(district)
+            val rawStatus = doc.getString("status") ?: "PENDING"
+            val parsedStatus = when (rawStatus.uppercase()) {
+                "OPEN", "PENDING" -> {
+                    val acceptedUid = doc.getString("acceptedDonorUid")
+                    if (!acceptedUid.isNullOrBlank()) RequestStatus.ACCEPTED else RequestStatus.PENDING
+                }
+                else -> runCatching { RequestStatus.valueOf(rawStatus) }.getOrDefault(RequestStatus.PENDING)
+            }
             BloodRequest(
                 id = doc.id,
-                requesterUid = doc.getString("requesterUid") ?: "",
+                requesterUid = doc.getString("requesterUid") ?: doc.getString("requesterId") ?: "",
                 requesterName = doc.getString("requesterName") ?: "",
                 patientName = doc.getString("patientName") ?: "",
                 patientAge = (doc.getLong("patientAge") ?: 0L).toInt(),
                 bloodGroup = BloodGroup.fromDisplay(doc.getString("bloodGroup") ?: "O_POSITIVE"),
-                unitsRequired = (doc.getLong("unitsRequired") ?: 1L).toInt(),
-                unitsFulfilled = (doc.getLong("unitsFulfilled") ?: 0L).toInt(),
+                unitsRequired = (doc.getLong("unitsRequired") ?: doc.getLong("bagsNeeded") ?: 1L).toInt(),
+                unitsFulfilled = (doc.getLong("unitsFulfilled") ?: doc.getLong("bagsPledged") ?: 0L).toInt(),
                 hospitalName = doc.getString("hospitalName") ?: "",
                 hospitalAddress = doc.getString("hospitalAddress") ?: "",
                 division = division,
@@ -371,29 +450,32 @@ class FirestoreService(
                 urgency = runCatching {
                     RequestUrgency.valueOf(doc.getString("urgency") ?: "HIGH")
                 }.getOrDefault(RequestUrgency.HIGH),
-                status = runCatching {
-                    RequestStatus.valueOf(doc.getString("status") ?: "PENDING")
-                }.getOrDefault(RequestStatus.PENDING),
+                status = parsedStatus,
                 contactPhone = doc.getString("contactPhone") ?: "",
                 medicalReason = doc.getString("medicalReason") ?: "",
                 requiredDateTime = doc.getLong("requiredDateTime") ?: System.currentTimeMillis(),
                 acceptedDonorUid = doc.getString("acceptedDonorUid"),
                 acceptedDonorName = doc.getString("acceptedDonorName"),
                 respondedDonorUids = (doc.get("respondedDonorUids") as? List<*>)
-                    ?.mapNotNull { it as? String } ?: emptyList(),
+                    ?.mapNotNull { it as? String }
+                    ?: (doc.get("acceptedDonorIds") as? List<*>)?.mapNotNull { it as? String }
+                    ?: emptyList(),
                 isEmergencyBroadcast = doc.getBoolean("isEmergencyBroadcast") ?: false,
+                broadcastDispatchedAt = doc.getLong("broadcastDispatchedAt"),
+                broadcastNotifiedCount = (doc.getLong("broadcastNotifiedCount") ?: 0L).toInt(),
+                adminNotes = doc.getString("adminNotes") ?: "",
                 createdAt = doc.getLong("createdAt") ?: System.currentTimeMillis(),
                 updatedAt = doc.getLong("updatedAt") ?: System.currentTimeMillis(),
                 expiresAt = doc.getLong("expiresAt") ?: (System.currentTimeMillis() + 72 * 3600 * 1000L)
             )
-            } catch (e: Exception) {
+        } catch (e: Exception) {
             Log.w("FirestoreService", "Skipping malformed blood request ${doc.id}: ${e.message}")
             null
         }
     }
 
     // =========================================================================
-    // 2. Real Public Donor Discovery (/public_donors) - Map-Free
+    // 2. Real Public Donor Discovery (/public_donors) with Server-Side Filters
     // =========================================================================
 
     fun observePublicDonors(
@@ -404,6 +486,7 @@ class FirestoreService(
         upazilaFilter: String? = null,
         areaQuery: String? = null,
         onlyAvailable: Boolean = false,
+        pageSize: Long = 100L,
         onError: ((String) -> Unit)? = null
     ): Flow<List<PublicDonorView>> = callbackFlow {
         val currentUser = try {
@@ -418,10 +501,16 @@ class FirestoreService(
         }
 
         val path = "public_donors"
-        // Query aligns strictly with firestore.rules: resource.data.isDonor == true
-        val query: Query = db.collection(path)
+        var query: Query = db.collection(path)
             .whereEqualTo("isDonor", true)
-            .limit(200)
+
+        if (filterBloodGroup != null && !includeCompatibleForRecipient) {
+            query = query.whereEqualTo("bloodGroup", filterBloodGroup.name)
+        }
+        if (!districtFilter.isNullOrBlank()) {
+            query = query.whereEqualTo("district", districtFilter.trim())
+        }
+        query = query.limit(pageSize)
 
         val listener = query.addSnapshotListener { snapshot, error ->
             if (error != null) {
@@ -438,76 +527,7 @@ class FirestoreService(
             }
 
             val donors = snapshot?.documents?.mapNotNull { doc ->
-                try {
-                    val bloodGroup = BloodGroup.fromDisplay(doc.getString("bloodGroup") ?: "O_POSITIVE")
-                    if (allowedGroups != null && !allowedGroups.contains(bloodGroup)) {
-                        return@mapNotNull null
-                    }
-
-                    val division = doc.getString("division") ?: "Dhaka"
-                    val district = doc.getString("district") ?: "Dhaka"
-                    val upazila = doc.getString("upazila") ?: ""
-                    val area = doc.getString("area") ?: ""
-                    val generalLocation = doc.getString("generalLocation").orEmpty().ifBlank {
-                        LocationHelper.formatGeneralLocation(division, district, upazila, area)
-                    }
-
-                    if (!LocationHelper.matchesLocationFilter(
-                            itemDivision = division,
-                            itemDistrict = district,
-                            itemUpazila = upazila,
-                            itemArea = "$area $generalLocation",
-                            divisionFilter = divisionFilter,
-                            districtFilter = districtFilter,
-                            upazilaFilter = upazilaFilter,
-                            areaQuery = areaQuery
-                        )
-                    ) {
-                        return@mapNotNull null
-                    }
-
-                    val storedAvail = runCatching {
-                        DonorAvailability.valueOf(doc.getString("availability") ?: "AVAILABLE")
-                    }.getOrDefault(DonorAvailability.AVAILABLE)
-
-                    val lastDonationDate = doc.getLong("lastDonationDate")
-                    val daysSinceLast = if (lastDonationDate != null && lastDonationDate > 0L) {
-                        (System.currentTimeMillis() - lastDonationDate) / (1000L * 60 * 60 * 24)
-                    } else {
-                        999L
-                    }
-                    val effectiveAvail = if (daysSinceLast < 90L && storedAvail == DonorAvailability.AVAILABLE) {
-                        DonorAvailability.RESTING
-                    } else {
-                        storedAvail
-                    }
-
-                    if (onlyAvailable && effectiveAvail != DonorAvailability.AVAILABLE) {
-                        return@mapNotNull null
-                    }
-
-                    PublicDonorView(
-                        uid = doc.getString("uid") ?: doc.id,
-                        name = doc.getString("name") ?: "Voluntary Donor",
-                        bloodGroup = bloodGroup,
-                        availability = effectiveAvail,
-                        division = division,
-                        district = district,
-                        upazila = upazila,
-                        area = area,
-                        generalLocation = generalLocation,
-                        isEmergencyDonor = doc.getBoolean("isEmergencyDonor") ?: false,
-                        contactPhone = doc.getString("contactPhone") ?: "",
-                        verificationStatus = runCatching {
-                            VerificationStatus.valueOf(doc.getString("verificationStatus") ?: "UNVERIFIED")
-                        }.getOrDefault(VerificationStatus.UNVERIFIED),
-                        donationCount = (doc.getLong("donationCount") ?: 0L).toInt(),
-                        lastDonationDate = lastDonationDate
-                    )
-                } catch (e: Exception) {
-                    Log.w("FirestoreService", "Skipping malformed public donor ${doc.id}: ${e.message}")
-                    null
-                }
+                parsePublicDonorDoc(doc, allowedGroups, divisionFilter, districtFilter, upazilaFilter, areaQuery, onlyAvailable)
             }?.sortedWith(
                 compareByDescending<PublicDonorView> {
                     filterBloodGroup != null && it.bloodGroup == filterBloodGroup
@@ -524,6 +544,156 @@ class FirestoreService(
         }
 
         awaitClose { listener.remove() }
+    }
+
+    /**
+     * Fetches a paginated page (default 25 items) of public donors using server-side filters,
+     * `area_lower` prefix search, and `startAfter(lastDocument)` cursor pagination.
+     */
+    suspend fun fetchPublicDonorsPage(
+        filterBloodGroup: BloodGroup? = null,
+        divisionFilter: String? = null,
+        districtFilter: String? = null,
+        upazilaFilter: String? = null,
+        areaQuery: String? = null,
+        onlyAvailable: Boolean = false,
+        lastSnapshot: DocumentSnapshot? = null,
+        pageSize: Long = DEFAULT_PAGE_SIZE
+    ): Resource<PaginatedResult<PublicDonorView>> {
+        val path = "public_donors"
+        return try {
+            var query: Query = db.collection(path).whereEqualTo("isDonor", true)
+            if (filterBloodGroup != null) {
+                query = query.whereEqualTo("bloodGroup", filterBloodGroup.name)
+            }
+            if (!divisionFilter.isNullOrBlank()) {
+                query = query.whereEqualTo("division", divisionFilter.trim())
+            }
+            if (!districtFilter.isNullOrBlank()) {
+                query = query.whereEqualTo("district", districtFilter.trim())
+            }
+            if (!upazilaFilter.isNullOrBlank()) {
+                query = query.whereEqualTo("upazila", upazilaFilter.trim())
+            }
+            if (onlyAvailable) {
+                query = query.whereEqualTo("availability", DonorAvailability.AVAILABLE.name)
+            }
+            if (!areaQuery.isNullOrBlank()) {
+                val q = areaQuery.trim().lowercase()
+                query = query
+                    .whereGreaterThanOrEqualTo("area_lower", q)
+                    .whereLessThanOrEqualTo("area_lower", q + "\uf8ff")
+            }
+            if (lastSnapshot != null) {
+                query = query.startAfter(lastSnapshot)
+            }
+            val snap = query.limit(pageSize).get().await()
+            val docs = snap.documents
+            val items = docs.mapNotNull {
+                parsePublicDonorDoc(
+                    doc = it,
+                    allowedGroups = filterBloodGroup?.let { bg -> setOf(bg) },
+                    divisionFilter = divisionFilter,
+                    districtFilter = districtFilter,
+                    upazilaFilter = upazilaFilter,
+                    areaQuery = areaQuery,
+                    onlyAvailable = onlyAvailable
+                )
+            }
+            Resource.Success(
+                PaginatedResult(
+                    items = items,
+                    lastSnapshot = docs.lastOrNull(),
+                    hasMore = docs.size.toLong() >= pageSize
+                )
+            )
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.LIST, path)
+            Resource.Error(FirebaseSecurityHelper.mapExceptionToMessage(e), e)
+        }
+    }
+
+    internal fun parsePublicDonorDoc(
+        doc: DocumentSnapshot,
+        allowedGroups: Set<BloodGroup>? = null,
+        divisionFilter: String? = null,
+        districtFilter: String? = null,
+        upazilaFilter: String? = null,
+        areaQuery: String? = null,
+        onlyAvailable: Boolean = false
+    ): PublicDonorView? {
+        return try {
+            val bloodGroup = BloodGroup.fromDisplay(doc.getString("bloodGroup") ?: "O_POSITIVE")
+            if (allowedGroups != null && !allowedGroups.contains(bloodGroup)) {
+                return null
+            }
+
+            val division = doc.getString("division") ?: "Dhaka"
+            val district = doc.getString("district") ?: "Dhaka"
+            val upazila = doc.getString("upazila") ?: ""
+            val area = doc.getString("area") ?: ""
+            val generalLocation = doc.getString("generalLocation").orEmpty().ifBlank {
+                LocationHelper.formatGeneralLocation(division, district, upazila, area)
+            }
+
+            if (!LocationHelper.matchesLocationFilter(
+                    itemDivision = division,
+                    itemDistrict = district,
+                    itemUpazila = upazila,
+                    itemArea = "$area $generalLocation",
+                    divisionFilter = divisionFilter,
+                    districtFilter = districtFilter,
+                    upazilaFilter = upazilaFilter,
+                    areaQuery = areaQuery
+                )
+            ) {
+                return null
+            }
+
+            val storedAvail = runCatching {
+                DonorAvailability.valueOf(
+                    doc.getString("availability") ?: doc.getString("donorAvailability") ?: "AVAILABLE"
+                )
+            }.getOrDefault(DonorAvailability.AVAILABLE)
+
+            val lastDonationDate = doc.getLong("lastDonationDate")
+            val daysSinceLast = if (lastDonationDate != null && lastDonationDate > 0L) {
+                (System.currentTimeMillis() - lastDonationDate) / (1000L * 60 * 60 * 24)
+            } else {
+                999L
+            }
+            val effectiveAvail = if (daysSinceLast < 90L && storedAvail == DonorAvailability.AVAILABLE) {
+                DonorAvailability.RESTING
+            } else {
+                storedAvail
+            }
+
+            if (onlyAvailable && effectiveAvail != DonorAvailability.AVAILABLE) {
+                return null
+            }
+
+            PublicDonorView(
+                uid = doc.getString("uid") ?: doc.id,
+                name = doc.getString("name") ?: "Voluntary Donor",
+                bloodGroup = bloodGroup,
+                availability = effectiveAvail,
+                division = division,
+                district = district,
+                upazila = upazila,
+                area = area,
+                generalLocation = generalLocation,
+                isEmergencyDonor = doc.getBoolean("isEmergencyDonor") ?: false,
+                contactPhone = doc.getString("contactPhone") ?: "",
+                verificationStatus = runCatching {
+                    VerificationStatus.valueOf(doc.getString("verificationStatus") ?: "UNVERIFIED")
+                }.getOrDefault(VerificationStatus.UNVERIFIED),
+                donationCount = (doc.getLong("donationCount") ?: 0L).toInt(),
+                lastDonationDate = lastDonationDate
+            )
+        } catch (e: Exception) {
+            Log.w("FirestoreService", "Skipping malformed public donor ${doc.id}: ${e.message}")
+            null
+        }
     }
 
     // =========================================================================
@@ -547,7 +717,7 @@ class FirestoreService(
 
         val path = "conversations"
         val listener = db.collection(path)
-            .whereArrayContains("participants", userUid)
+            .whereArrayContains("participantIds", userUid)
             .addSnapshotListener { snapshot, error ->
                 if (error != null) {
                     handleFirestoreError(error, OperationType.LIST, path)
@@ -556,8 +726,10 @@ class FirestoreService(
                     return@addSnapshotListener
                 }
                 val list = snapshot?.documents?.mapNotNull { doc ->
-                    val participants = (doc.get("participants") as? List<*>)
-                        ?.mapNotNull { it as? String } ?: emptyList()
+                    val participants = (doc.get("participantIds") as? List<*>)
+                        ?.mapNotNull { it as? String }
+                        ?: (doc.get("participants") as? List<*>)?.mapNotNull { it as? String }
+                        ?: emptyList()
                     val names = (doc.get("participantNames") as? Map<*, *>)
                         ?.mapNotNull { (k, v) ->
                             if (k is String && v is String) k to v else null
@@ -573,7 +745,7 @@ class FirestoreService(
                         participantNames = names,
                         participantBloodGroups = groups,
                         lastMessage = doc.getString("lastMessage") ?: "",
-                        lastMessageTimestamp = doc.getLong("lastMessageTimestamp") ?: 0L,
+                        lastMessageTimestamp = doc.getLong("lastMessageTimestamp") ?: doc.getLong("lastMessageTime") ?: 0L,
                         requestId = doc.getString("requestId")
                     )
                 }?.sortedByDescending { it.lastMessageTimestamp } ?: emptyList()
@@ -615,7 +787,7 @@ class FirestoreService(
                     ChatMessage(
                         id = doc.id,
                         conversationId = conversationId,
-                        senderUid = doc.getString("senderUid") ?: "",
+                        senderUid = doc.getString("senderUid") ?: doc.getString("senderId") ?: "",
                         senderName = doc.getString("senderName") ?: "",
                         text = doc.getString("text") ?: "",
                         timestamp = doc.getLong("timestamp") ?: 0L,
@@ -638,7 +810,7 @@ class FirestoreService(
         requestId: String? = null
     ): Resource<String> {
         if (myUid.isBlank() || otherUid.isBlank() || myUid == otherUid) {
-            return Resource.Error("Cannot start a conversation with yourself.")
+            return Resource.Error("নিজের সাথে চ্যাট শুরু করা যাবে না।")
         }
         val sortedIds = listOf(myUid, otherUid).sorted()
         val convId = "${sortedIds[0]}_${sortedIds[1]}"
@@ -647,12 +819,15 @@ class FirestoreService(
         return try {
             val existing = docRef.get().await()
             if (!existing.exists()) {
+                val now = System.currentTimeMillis()
                 val payload = mapOf<String, Any?>(
                     "participants" to sortedIds,
+                    "participantIds" to sortedIds,
                     "participantNames" to mapOf(myUid to myName, otherUid to otherName),
                     "participantBloodGroups" to mapOf(myUid to myBloodGroup, otherUid to otherBloodGroup),
-                    "lastMessage" to "Conversation started",
-                    "lastMessageTimestamp" to System.currentTimeMillis(),
+                    "lastMessage" to "কথোপকথন শুরু হয়েছে",
+                    "lastMessageTimestamp" to now,
+                    "lastMessageTime" to now,
                     "requestId" to requestId
                 ).filterValues { it != null } as Map<String, Any>
                 docRef.set(payload).await()
@@ -660,7 +835,7 @@ class FirestoreService(
             Resource.Success(convId)
         } catch (e: Exception) {
             handleFirestoreError(e, OperationType.CREATE, docRef.path)
-            Resource.Error(e.localizedMessage ?: "Failed to start conversation", e)
+            Resource.Error(FirebaseSecurityHelper.mapExceptionToMessage(e), e)
         }
     }
 
@@ -672,10 +847,10 @@ class FirestoreService(
     ): Resource<Unit> {
         val cleanText = text.trim()
         if (cleanText.isBlank()) {
-            return Resource.Error("Message cannot be empty.")
+            return Resource.Error("বার্তা খালি রাখা যাবে না।")
         }
-        if (cleanText.length > 1000) {
-            return Resource.Error("Message is too long (maximum 1000 characters).")
+        if (cleanText.length > 500) {
+            return Resource.Error("বার্তা সর্বোচ্চ ৫০০ অক্ষরের হতে পারবে।")
         }
 
         val convRef = db.collection("conversations").document(conversationId)
@@ -689,7 +864,8 @@ class FirestoreService(
                 mapOf(
                     "conversationId" to conversationId,
                     "senderUid" to senderUid,
-                    "senderName" to senderName.trim().ifBlank { "User" },
+                    "senderId" to senderUid,
+                    "senderName" to senderName.trim().ifBlank { "ব্যবহারকারী" },
                     "text" to cleanText,
                     "timestamp" to now
                 )
@@ -698,14 +874,15 @@ class FirestoreService(
                 convRef,
                 mapOf(
                     "lastMessage" to cleanText,
-                    "lastMessageTimestamp" to now
+                    "lastMessageTimestamp" to now,
+                    "lastMessageTime" to now
                 )
             )
             batch.commit().await()
             Resource.Success(Unit)
         } catch (e: Exception) {
             handleFirestoreError(e, OperationType.CREATE, msgRef.path)
-            Resource.Error(e.localizedMessage ?: "Failed to send message", e)
+            Resource.Error(FirebaseSecurityHelper.mapExceptionToMessage(e), e)
         }
     }
 
@@ -728,9 +905,9 @@ class FirestoreService(
             return@callbackFlow
         }
 
-        val path = "donations"
+        val path = "donation_history"
         val listener = db.collection(path)
-            .whereEqualTo("donorUid", donorUid)
+            .whereEqualTo("donorId", donorUid)
             .addSnapshotListener { snapshot, error ->
                 if (error != null) {
                     handleFirestoreError(error, OperationType.LIST, path)
@@ -741,7 +918,7 @@ class FirestoreService(
                 val records = snapshot?.documents?.mapNotNull { doc ->
                     DonationRecord(
                         id = doc.id,
-                        donorUid = doc.getString("donorUid") ?: "",
+                        donorUid = doc.getString("donorId") ?: doc.getString("donorUid") ?: "",
                         donorName = doc.getString("donorName") ?: "",
                         bloodGroup = BloodGroup.fromDisplay(doc.getString("bloodGroup") ?: "O_POSITIVE"),
                         requestId = doc.getString("requestId"),
@@ -749,8 +926,8 @@ class FirestoreService(
                         city = doc.getString("city") ?: "",
                         donationDate = doc.getLong("donationDate") ?: 0L,
                         verifiedByOrgId = doc.getString("verifiedByOrgId"),
-                        verifiedByOrgName = doc.getString("verifiedByOrgName") ?: "Verified Hospital / Organization",
-                        unitsDonated = (doc.getLong("unitsDonated") ?: 1L).toInt(),
+                        verifiedByOrgName = doc.getString("verifiedByOrgName") ?: "অনুমোদিত হাসপাতাল / প্রতিষ্ঠান",
+                        unitsDonated = (doc.getLong("bags") ?: doc.getLong("unitsDonated") ?: 1L).toInt(),
                         certificateCode = doc.getString("certificateCode") ?: ""
                     )
                 }?.sortedByDescending { it.donationDate } ?: emptyList()
@@ -860,7 +1037,7 @@ class FirestoreService(
             FirebaseAuth.getInstance().currentUser
         } catch (_: Exception) {
             null
-        } ?: return Resource.Error("You must be signed in to publish a blood donation camp.")
+        } ?: return Resource.Error("ক্যাম্পেইন প্রকাশ করতে অনুগ্রহ করে লগইন করুন।")
 
         val docRef = if (campaign.id.isNotBlank()) {
             db.collection("campaigns").document(campaign.id)
@@ -870,7 +1047,7 @@ class FirestoreService(
         val now = System.currentTimeMillis()
         val payload = mapOf(
             "organizationId" to campaign.organizationId.ifBlank { currentUser.uid },
-            "organizationName" to campaign.organizationName.trim().ifBlank { "Community Blood Drive" },
+            "organizationName" to campaign.organizationName.trim().ifBlank { "স্বেচ্ছাসেবী রক্তদান কর্মসূচি" },
             "title" to campaign.title.trim(),
             "description" to campaign.description.trim(),
             "location" to campaign.location.trim(),
@@ -892,450 +1069,64 @@ class FirestoreService(
         }
     }
 
-    // =========================================================================
-    // 5. Verification Queue & Admin Operations (RBAC-Protected)
-    // =========================================================================
-
-    suspend fun checkIsCurrentUserAdmin(uid: String): Boolean {
-        val currentUser = try {
-            FirebaseAuth.getInstance().currentUser
+    internal fun parseUserProfileDoc(doc: DocumentSnapshot): UserProfile? {
+        return try {
+            val uid = doc.getString("uid") ?: doc.id
+            val locMap = doc.get("location") as? Map<*, *>
+            val district = doc.getString("district")
+                ?: (locMap?.get("district") as? String)
+                ?: doc.getString("city")
+                ?: "Dhaka"
+            val division = doc.getString("division")
+                ?: (locMap?.get("division") as? String)
+                ?: LocationHelper.inferDivisionForDistrict(district)
+            val upazila = doc.getString("upazila")
+                ?: (locMap?.get("upazila") as? String)
+                ?: ""
+            val area = doc.getString("area")
+                ?: (locMap?.get("area") as? String)
+                ?: ""
+            UserProfile(
+                uid = uid,
+                name = doc.getString("name") ?: "",
+                email = doc.getString("email") ?: "",
+                bloodGroup = BloodGroup.fromDisplay(doc.getString("bloodGroup") ?: "O_POSITIVE"),
+                dateOfBirth = doc.getString("dateOfBirth") ?: "",
+                isDonor = doc.getBoolean("isDonor") ?: true,
+                donorAvailability = runCatching {
+                    DonorAvailability.valueOf(doc.getString("donorAvailability") ?: "AVAILABLE")
+                }.getOrDefault(DonorAvailability.AVAILABLE),
+                lastDonationDate = doc.getLong("lastDonationDate"),
+                isEmergencyDonor = doc.getBoolean("isEmergencyDonor") ?: false,
+                contactPhone = doc.getString("contactPhone") ?: "",
+                showPhonePublicly = doc.getBoolean("showPhonePublicly") ?: false,
+                location = LocationInfo(
+                    division = division,
+                    district = district,
+                    upazila = upazila,
+                    area = area,
+                    city = district
+                ),
+                verificationStatus = runCatching {
+                    VerificationStatus.valueOf(doc.getString("verificationStatus") ?: "UNVERIFIED")
+                }.getOrDefault(VerificationStatus.UNVERIFIED),
+                role = runCatching {
+                    UserRole.valueOf(doc.getString("role") ?: "USER")
+                }.getOrDefault(UserRole.USER),
+                accountStatus = runCatching {
+                    AccountStatus.valueOf(doc.getString("accountStatus") ?: "ACTIVE")
+                }.getOrDefault(AccountStatus.ACTIVE),
+                suspensionReason = doc.getString("suspensionReason"),
+                organizationId = doc.getString("organizationId"),
+                donationCount = (doc.getLong("donationCount") ?: 0L).toInt(),
+                badges = (doc.get("badges") as? List<*>)?.mapNotNull { it as? String } ?: emptyList(),
+                photoUrl = doc.getString("photoUrl") ?: "",
+                fcmToken = doc.getString("fcmToken") ?: "",
+                createdAt = doc.getLong("createdAt") ?: 0L,
+                updatedAt = doc.getLong("updatedAt") ?: 0L
+            )
         } catch (_: Exception) {
             null
-        } ?: return false
-
-        if (uid.isBlank() || currentUser.uid != uid) return false
-
-        val hasAdminClaim = try {
-            val tokenResult = currentUser.getIdToken(true).await()
-            tokenResult.claims["admin"] == true
-        } catch (_: Exception) {
-            false
-        }
-        if (hasAdminClaim) return true
-
-        return try {
-            db.collection("admins").document(uid).get().await().exists()
-        } catch (_: Exception) {
-            false
-        }
-    }
-
-    suspend fun submitVerificationRequest(
-        applicantUid: String,
-        name: String,
-        type: String,
-        documents: List<String>
-    ): Resource<String> {
-        val currentUser = try {
-            FirebaseAuth.getInstance().currentUser
-        } catch (_: Exception) {
-            null
-        } ?: return Resource.Error("You must be signed in to submit a verification request.")
-
-        val effectiveUid = applicantUid.ifBlank { currentUser.uid }
-        if (effectiveUid != currentUser.uid) {
-            return Resource.Error("You can only submit a verification request for your own account.")
-        }
-
-        val normalizedType = when (type.trim().uppercase()) {
-            "ORGANIZATION" -> "ORGANIZATION"
-            else -> "DONOR"
-        }
-        val docId = "ver_${effectiveUid}_${normalizedType.lowercase()}"
-        val now = System.currentTimeMillis()
-
-        val docRef = db.collection("verification_requests").document(docId)
-        val payload = mapOf(
-            "applicantUid" to effectiveUid,
-            "name" to name.trim().ifBlank { currentUser.displayName ?: "Verified Applicant" },
-            "type" to normalizedType,
-            "documents" to documents.take(10),
-            "status" to "PENDING",
-            "submittedAt" to now
-        )
-        return try {
-            docRef.set(payload).await()
-            Resource.Success(docRef.id)
-        } catch (e: Exception) {
-            handleFirestoreError(e, OperationType.CREATE, docRef.path)
-            Resource.Error(FirebaseSecurityHelper.mapExceptionToMessage(e), e)
-        }
-    }
-
-    fun observePendingVerificationTasks(
-        onError: ((String) -> Unit)? = null
-    ): Flow<List<VerificationTask>> = callbackFlow {
-        val currentUser = try {
-            FirebaseAuth.getInstance().currentUser
-        } catch (_: Exception) {
-            null
-        }
-        if (currentUser == null) {
-            trySend(emptyList())
-            close()
-            return@callbackFlow
-        }
-
-        val path = "verification_requests"
-        val listener = db.collection(path)
-            .whereEqualTo("status", "PENDING")
-            .addSnapshotListener { snapshot, error ->
-                if (error != null) {
-                    handleFirestoreError(error, OperationType.LIST, path)
-                    onError?.invoke(FirebaseSecurityHelper.mapExceptionToMessage(error))
-                    trySend(emptyList())
-                    return@addSnapshotListener
-                }
-                val list = snapshot?.documents?.mapNotNull { doc ->
-                    val appUid = doc.getString("applicantUid") ?: doc.getString("targetId") ?: ""
-                    val rawStatus = doc.getString("status") ?: "PENDING"
-                    val parsedStatus = when (rawStatus.uppercase()) {
-                        "APPROVED", "VERIFIED" -> VerificationStatus.VERIFIED
-                        "REJECTED" -> VerificationStatus.REJECTED
-                        else -> VerificationStatus.PENDING_REVIEW
-                    }
-                    VerificationTask(
-                        id = doc.id,
-                        targetId = appUid,
-                        applicantUid = appUid,
-                        name = doc.getString("name") ?: "",
-                        type = doc.getString("type") ?: "DONOR",
-                        documents = (doc.get("documents") as? List<*>)?.mapNotNull { it as? String } ?: emptyList(),
-                        status = parsedStatus,
-                        submittedAt = doc.getLong("submittedAt") ?: 0L
-                    )
-                }?.sortedByDescending { it.submittedAt } ?: emptyList()
-                trySend(list)
-            }
-
-        awaitClose { listener.remove() }
-    }
-
-    fun observeAuditLogs(
-        onError: ((String) -> Unit)? = null
-    ): Flow<List<AuditLogEntry>> = callbackFlow {
-        val currentUser = try {
-            FirebaseAuth.getInstance().currentUser
-        } catch (_: Exception) {
-            null
-        }
-        if (currentUser == null) {
-            trySend(emptyList())
-            close()
-            return@callbackFlow
-        }
-
-        val path = "audit_logs"
-        val listener = db.collection(path)
-            .orderBy("timestamp", Query.Direction.DESCENDING)
-            .limit(50)
-            .addSnapshotListener { snapshot, error ->
-                if (error != null) {
-                    handleFirestoreError(error, OperationType.LIST, path)
-                    onError?.invoke(FirebaseSecurityHelper.mapExceptionToMessage(error))
-                    trySend(emptyList())
-                    return@addSnapshotListener
-                }
-                val logs = snapshot?.documents?.mapNotNull { doc ->
-                    val rawDetails = doc.get("details")
-                    val detailsMap: Map<String, String> = when (rawDetails) {
-                        is Map<*, *> -> rawDetails.entries.associate { (k, v) -> k.toString() to v.toString() }
-                        is String -> if (rawDetails.isNotBlank()) mapOf("summary" to rawDetails) else emptyMap()
-                        else -> emptyMap()
-                    }
-                    AuditLogEntry(
-                        id = doc.id,
-                        actorUid = doc.getString("actorUid") ?: "",
-                        actorEmail = doc.getString("actorEmail") ?: "",
-                        action = doc.getString("action") ?: "",
-                        targetId = doc.getString("targetId") ?: "",
-                        targetType = doc.getString("targetType") ?: "",
-                        details = detailsMap,
-                        timestamp = doc.getLong("timestamp") ?: 0L
-                    )
-                } ?: emptyList()
-                trySend(logs)
-            }
-
-        awaitClose { listener.remove() }
-    }
-
-    suspend fun reviewVerificationTaskAsAdmin(
-        task: VerificationTask,
-        approved: Boolean,
-        adminUid: String,
-        adminEmail: String
-    ): Resource<Unit> {
-        val currentUser = try {
-            FirebaseAuth.getInstance().currentUser
-        } catch (_: Exception) {
-            null
-        } ?: return Resource.Error("Administrator authentication is required.")
-
-        val decision = if (approved) "APPROVED" else "REJECTED"
-        val now = System.currentTimeMillis()
-        val taskRef = db.collection("verification_requests").document(task.id)
-
-        return try {
-            db.runTransaction { tx ->
-                val snap = tx.get(taskRef)
-                if (!snap.exists()) {
-                    throw IllegalStateException("Verification task not found.")
-                }
-                tx.update(
-                    taskRef,
-                    mapOf(
-                        "status" to decision,
-                        "reviewedByUid" to adminUid.ifBlank { currentUser.uid },
-                        "reviewedAt" to now
-                    )
-                )
-
-                if (task.type == "ORGANIZATION") {
-                    val orgRef = db.collection("organizations").document(task.applicantUid)
-                    val orgSnap = tx.get(orgRef)
-                    if (orgSnap.exists()) {
-                        tx.update(orgRef, mapOf("isVerified" to approved))
-                    }
-                } else {
-                    val verStatus = if (approved) VerificationStatus.VERIFIED.name else VerificationStatus.REJECTED.name
-                    val userRef = db.collection("users").document(task.applicantUid)
-                    val pubRef = db.collection("public_donors").document(task.applicantUid)
-                    val userSnap = tx.get(userRef)
-                    val pubSnap = tx.get(pubRef)
-                    if (userSnap.exists()) {
-                        tx.update(userRef, mapOf("verificationStatus" to verStatus, "updatedAt" to now))
-                    }
-                    if (pubSnap.exists()) {
-                        tx.update(pubRef, mapOf("verificationStatus" to verStatus, "updatedAt" to now))
-                    }
-                }
-
-                val auditRef = db.collection("audit_logs").document()
-                tx.set(
-                    auditRef,
-                    mapOf(
-                        "actorUid" to adminUid.ifBlank { currentUser.uid },
-                        "actorEmail" to adminEmail.ifBlank { currentUser.email ?: "admin" },
-                        "action" to "VERIFICATION_$decision",
-                        "targetId" to task.applicantUid,
-                        "targetType" to task.type,
-                        "details" to "$decision verification for ${task.name}",
-                        "timestamp" to now
-                    )
-                )
-            }.await()
-            Resource.Success(Unit)
-        } catch (e: Exception) {
-            handleFirestoreError(e, OperationType.UPDATE, taskRef.path)
-            Resource.Error(FirebaseSecurityHelper.mapExceptionToMessage(e), e)
-        }
-    }
-
-    /**
-     * Uploads a verification document (PDF, JPEG, PNG, or WEBP <= 10 MB) to Firebase Storage
-     * at `/verifications/{userId}/{sanitizedDocumentId}` in strict compliance with `storage.rules`.
-     */
-    suspend fun uploadVerificationDocument(
-        context: Context,
-        userId: String,
-        uri: Uri
-    ): Resource<String> {
-        if (userId.isBlank()) {
-            return Resource.Error("অনুগ্রহ করে প্রথমে লগইন করুন। (Please sign in first.)")
-        }
-        val resolver = context.contentResolver
-        val mimeType = resolver.getType(uri) ?: "application/pdf"
-        val allowedMimeTypes = setOf(
-            "image/jpeg",
-            "image/png",
-            "image/webp",
-            "application/pdf"
-        )
-        if (mimeType !in allowedMimeTypes) {
-            return Resource.Error(
-                "শুধুমাত্র PDF, JPG, PNG বা WEBP ফাইল আপলোড করা যাবে। (Only PDF, JPEG, PNG, or WEBP files are allowed.)"
-            )
-        }
-
-        var fileName = "verification_report.pdf"
-        var fileSize = 0L
-        resolver.query(uri, null, null, null, null)?.use { cursor ->
-            val nameIdx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-            val sizeIdx = cursor.getColumnIndex(OpenableColumns.SIZE)
-            if (cursor.moveToFirst()) {
-                if (nameIdx >= 0) {
-                    fileName = cursor.getString(nameIdx) ?: fileName
-                }
-                if (sizeIdx >= 0 && !cursor.isNull(sizeIdx)) {
-                    fileSize = cursor.getLong(sizeIdx)
-                }
-            }
-        }
-
-        val maxBytes = 10L * 1024L * 1024L
-        if (fileSize > maxBytes) {
-            return Resource.Error(
-                "ফাইলের আকার সর্বোচ্চ ১০ মেগাবাইট হতে পারবে। (File size must not exceed 10 MB.)"
-            )
-        }
-
-        val ext = when (mimeType) {
-            "image/jpeg" -> "jpg"
-            "image/png" -> "png"
-            "image/webp" -> "webp"
-            else -> "pdf"
-        }
-        val sanitizedBase = fileName
-            .substringBeforeLast('.')
-            .replace(Regex("[^a-zA-Z0-9_\\-]"), "_")
-            .take(48)
-            .ifBlank { "lab_report" }
-        val documentId = "${System.currentTimeMillis()}_${sanitizedBase}.$ext"
-        val storagePath = "verifications/$userId/$documentId"
-
-        return try {
-            val storageRef = FirebaseStorage.getInstance().reference.child(storagePath)
-            val metadata = StorageMetadata.Builder()
-                .setContentType(mimeType)
-                .build()
-            storageRef.putFile(uri, metadata).await()
-            Resource.Success(storagePath)
-        } catch (e: Exception) {
-            Log.e("FirestoreService", "Failed to upload verification document to $storagePath", e)
-            Resource.Error(FirebaseSecurityHelper.mapExceptionToMessage(e), e)
-        }
-    }
-
-    /**
-     * Computes live system metrics from Firestore collections for the Admin Dashboard.
-     */
-    suspend fun fetchSystemMetrics(): SystemMetrics {
-        return try {
-            val donorsSnap = db.collection("public_donors")
-                .whereEqualTo("isDonor", true)
-                .limit(500)
-                .get()
-                .await()
-            val totalDonors = donorsSnap.size()
-            val activeDonors = donorsSnap.documents.count {
-                (it.getString("availability") ?: DonorAvailability.AVAILABLE.name) == DonorAvailability.AVAILABLE.name
-            }
-            val emergencyDonorsOnline = donorsSnap.documents.count {
-                (it.getBoolean("isEmergencyDonor") ?: false) &&
-                    (it.getString("availability") ?: DonorAvailability.AVAILABLE.name) != DonorAvailability.UNAVAILABLE.name
-            }
-            val totalDonationsCompleted = donorsSnap.documents.sumOf {
-                (it.getLong("donationCount") ?: 0L).toInt()
-            }
-
-            val requestsSnap = db.collection("blood_requests")
-                .limit(500)
-                .get()
-                .await()
-            val activeStatuses = setOf(
-                RequestStatus.PENDING.name,
-                RequestStatus.DONOR_RESPONDED.name,
-                RequestStatus.ACCEPTED.name
-            )
-            val pendingRequests = requestsSnap.documents.count {
-                (it.getString("status") ?: RequestStatus.PENDING.name) in activeStatuses
-            }
-            val fulfilledRequests = requestsSnap.documents.count {
-                it.getString("status") == RequestStatus.FULFILLED.name
-            }
-
-            val verifiedOrgs = try {
-                db.collection("organizations")
-                    .whereEqualTo("isVerified", true)
-                    .limit(200)
-                    .get()
-                    .await()
-                    .size()
-            } catch (_: Exception) {
-                0
-            }
-
-            SystemMetrics(
-                totalRegisteredUsers = totalDonors,
-                activeDonors = activeDonors,
-                emergencyDonorsOnline = emergencyDonorsOnline,
-                pendingRequests = pendingRequests,
-                fulfilledRequests = fulfilledRequests,
-                verifiedOrganizations = verifiedOrgs,
-                totalDonationsCompleted = totalDonationsCompleted,
-                serverStatus = "Operational",
-                appCheckStatus = "Initialized"
-            )
-        } catch (e: Exception) {
-            Log.w("FirestoreService", "Unable to fetch full live metrics: ${e.message}")
-            SystemMetrics(
-                serverStatus = "Degraded / Offline",
-                appCheckStatus = "Initialized"
-            )
-        }
-    }
-
-    suspend fun fetchEmergencyBroadcastArmed(): Boolean {
-        return try {
-            val snap = db.collection("system_config")
-                .document("emergency_broadcast")
-                .get()
-                .await()
-            if (snap.exists()) {
-                snap.getBoolean("armed") ?: true
-            } else {
-                true
-            }
-        } catch (_: Exception) {
-            true
-        }
-    }
-
-    suspend fun setEmergencyBroadcastArmed(
-        armed: Boolean,
-        adminUid: String,
-        adminEmail: String
-    ): Resource<Boolean> {
-        val currentUser = try {
-            FirebaseAuth.getInstance().currentUser
-        } catch (_: Exception) {
-            null
-        } ?: return Resource.Error("Administrator authentication is required.")
-
-        val configRef = db.collection("system_config").document("emergency_broadcast")
-        val auditRef = db.collection("audit_logs").document()
-        val now = System.currentTimeMillis()
-        val actorUid = adminUid.ifBlank { currentUser.uid }
-        val actorEmail = adminEmail.ifBlank { currentUser.email ?: "admin@roktosetu.org" }
-
-        return try {
-            val batch = db.batch()
-            batch.set(
-                configRef,
-                mapOf(
-                    "armed" to armed,
-                    "updatedByUid" to actorUid,
-                    "updatedAt" to now
-                )
-            )
-            batch.set(
-                auditRef,
-                mapOf(
-                    "actorUid" to actorUid,
-                    "actorEmail" to actorEmail,
-                    "action" to if (armed) "EMERGENCY_BROADCAST_ARMED" else "EMERGENCY_BROADCAST_PAUSED",
-                    "targetId" to "emergency_broadcast",
-                    "targetType" to "SYSTEM_CONFIG",
-                    "details" to if (armed) "Emergency broadcast engine armed" else "Emergency broadcast engine paused",
-                    "timestamp" to now
-                )
-            )
-            batch.commit().await()
-            Resource.Success(armed)
-        } catch (e: Exception) {
-            handleFirestoreError(e, OperationType.WRITE, configRef.path)
-            Resource.Error(FirebaseSecurityHelper.mapExceptionToMessage(e), e)
         }
     }
 }

@@ -1,5 +1,6 @@
 {
   "firestore": {
+    "database": "ai-studio-android-lifelink-32b78329-0908-44db-bbd3-9204072ef691",
     "rules": "firestore.rules",
     "indexes": "firestore.indexes.json"
   },

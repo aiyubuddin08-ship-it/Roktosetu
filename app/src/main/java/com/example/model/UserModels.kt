@@ -77,6 +77,14 @@ data class LocationInfo(
 }
 
 /**
+ * Account status for administrative moderation.
+ */
+enum class AccountStatus(val labelEn: String, val labelBn: String) {
+    ACTIVE("Active", "সক্রিয়"),
+    SUSPENDED("Suspended", "স্থগিত")
+}
+
+/**
  * Full User Profile stored in `/users/{uid}` (strictly private to the user and admins).
  */
 data class UserProfile(
@@ -94,6 +102,8 @@ data class UserProfile(
     val location: LocationInfo = LocationInfo(),
     val verificationStatus: VerificationStatus = VerificationStatus.UNVERIFIED,
     val role: UserRole = UserRole.USER,
+    val accountStatus: AccountStatus = AccountStatus.ACTIVE,
+    val suspensionReason: String? = null,
     val organizationId: String? = null,
     val donationCount: Int = 0,
     val badges: List<String> = emptyList(),
@@ -109,6 +119,7 @@ data class UserProfile(
      * must always be determined by a qualified physician or blood bank prior to donation.
      */
     fun isEligibleToDonate(currentTimeMillis: Long = System.currentTimeMillis()): Boolean {
+        if (accountStatus == AccountStatus.SUSPENDED) return false
         if (!isDonor || donorAvailability == DonorAvailability.UNAVAILABLE || donorAvailability == DonorAvailability.RESTING) {
             return false
         }
@@ -135,10 +146,10 @@ data class UserProfile(
         val effectiveDistrict = location.district.ifBlank { location.city.ifBlank { "Dhaka" } }
         val effectiveUpazila = location.upazila
         val effectiveArea = location.area
-        val effectiveAvailability = if (!isEligibleToDonate() && lastDonationDate != null && daysUntilNextEligible() > 0) {
-            DonorAvailability.RESTING
-        } else {
-            donorAvailability
+        val effectiveAvailability = when {
+            accountStatus == AccountStatus.SUSPENDED -> DonorAvailability.UNAVAILABLE
+            !isEligibleToDonate() && lastDonationDate != null && daysUntilNextEligible() > 0 -> DonorAvailability.RESTING
+            else -> donorAvailability
         }
 
         return PublicDonorView(
@@ -157,8 +168,8 @@ data class UserProfile(
                 upazila = effectiveUpazila,
                 area = effectiveArea
             ),
-            isEmergencyDonor = isEmergencyDonor,
-            contactPhone = if (showPhonePublicly) contactPhone else "",
+            isEmergencyDonor = isEmergencyDonor && accountStatus == AccountStatus.ACTIVE,
+            contactPhone = if (showPhonePublicly && accountStatus == AccountStatus.ACTIVE) contactPhone else "",
             verificationStatus = verificationStatus,
             donationCount = donationCount,
             lastDonationDate = lastDonationDate
@@ -184,6 +195,7 @@ data class UserProfile(
             "district" to effectiveDistrict,
             "upazila" to location.upazila,
             "area" to location.area,
+            "area_lower" to location.area.trim().lowercase(),
             "city" to location.city.ifBlank { effectiveDistrict },
             "location" to location.copy(
                 division = effectiveDivision,
@@ -192,6 +204,8 @@ data class UserProfile(
             ).toMap(),
             "verificationStatus" to verificationStatus.name,
             "role" to role.name,
+            "accountStatus" to accountStatus.name,
+            "suspensionReason" to suspensionReason,
             "organizationId" to organizationId,
             "donationCount" to donationCount,
             "badges" to badges,
@@ -241,16 +255,19 @@ data class PublicDonorView(
             "name" to name,
             "bloodGroup" to bloodGroup.name,
             "availability" to availability.name,
+            "donorAvailability" to availability.name,
             "division" to division.ifBlank { "Dhaka" },
             "district" to district.ifBlank { "Dhaka" },
             "upazila" to upazila,
             "area" to area,
+            "area_lower" to area.trim().lowercase(),
             "generalLocation" to generalLocation.ifBlank {
                 LocationHelper.formatGeneralLocation(division, district, upazila, area)
             },
             "isDonor" to isDonorFlag,
             "isEmergencyDonor" to isEmergencyDonor,
             "contactPhone" to contactPhone,
+            "showPhonePublicly" to contactPhone.isNotBlank(),
             "verificationStatus" to verificationStatus.name,
             "donationCount" to donationCount,
             "lastDonationDate" to lastDonationDate,

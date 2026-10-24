@@ -141,4 +141,48 @@ class RoktoSetuRuleTest : FirestoreEmulatorTestBase() {
         assertEquals("DONOR_RESPONDED", updatedSnap.getString("status"))
         assertEquals(donorUid, updatedSnap.getString("acceptedDonorUid"))
     }
+
+    @Test
+    fun `user can submit valid report against another target but cannot self report or read others reports`() {
+        val aliceUid = signInTestUser("alice.reporter@roktosetu.org", "Pass1234!")
+        val bobUid = "target_user_bob_99"
+
+        val validReport = mapOf(
+            "id" to "rep_test_1",
+            "reporterUid" to aliceUid,
+            "reporterEmail" to "alice.reporter@roktosetu.org",
+            "targetId" to bobUid,
+            "targetType" to "USER",
+            "category" to "FAKE_REQUEST",
+            "details" to "এই ব্যবহারকারী ভুয়া রক্তের অনুরোধ পোস্ট করেছেন বলে সন্দেহ হচ্ছে।",
+            "status" to "OPEN",
+            "createdAt" to System.currentTimeMillis()
+        )
+
+        awaitTask(firestore.collection("reports").document("rep_test_1").set(validReport))
+
+        // Self-report must fail
+        val selfReport = validReport.toMutableMap().apply {
+            put("id", "rep_self_1")
+            put("targetId", aliceUid)
+        }
+        try {
+            awaitTask(firestore.collection("reports").document("rep_self_1").set(selfReport))
+            fail("Expected PERMISSION_DENIED when reporting self")
+        } catch (e: Exception) {
+            val firestoreEx = e as? FirebaseFirestoreException ?: e.cause as? FirebaseFirestoreException
+            assertEquals(FirebaseFirestoreException.Code.PERMISSION_DENIED, firestoreEx?.code)
+        }
+
+        // Another user cannot read Alice's report
+        signInTestUser("charlie.other@roktosetu.org", "Pass1234!")
+        try {
+            awaitTask(firestore.collection("reports").document("rep_test_1").get())
+            fail("Expected PERMISSION_DENIED when reading another user's report")
+        } catch (e: Exception) {
+            val firestoreEx = e as? FirebaseFirestoreException ?: e.cause as? FirebaseFirestoreException
+            assertEquals(FirebaseFirestoreException.Code.PERMISSION_DENIED, firestoreEx?.code)
+        }
+    }
 }
+

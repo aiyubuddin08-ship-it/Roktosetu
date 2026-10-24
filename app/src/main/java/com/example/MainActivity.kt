@@ -1,10 +1,14 @@
 package com.example
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.navigation.compose.rememberNavController
 import com.example.data.firebase.FirebaseSecurityHelper
 import com.example.data.repository.RoktoSetuRepository
@@ -34,9 +38,13 @@ class MainActivity : ComponentActivity() {
     private val adminViewModel: AdminViewModel by viewModels { AdminViewModelFactory(repository) }
     private val extraViewModel: ExtraFeaturesViewModel by viewModels { ExtraFeaturesViewModelFactory(repository) }
 
+    private var pendingOpenRoute by mutableStateOf<String?>(null)
+    private var pendingTargetId by mutableStateOf<String?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         FirebaseSecurityHelper.initializeAppCheckAndChannels(applicationContext)
+        extractNotificationDeepLink(intent)
         enableEdgeToEdge()
         setContent {
             RoktoSetuTheme {
@@ -48,9 +56,30 @@ class MainActivity : ComponentActivity() {
                     chatViewModel = chatViewModel,
                     orgViewModel = orgViewModel,
                     adminViewModel = adminViewModel,
-                    extraViewModel = extraViewModel
+                    extraViewModel = extraViewModel,
+                    deepLinkRoute = pendingOpenRoute,
+                    deepLinkTargetId = pendingTargetId,
+                    onDeepLinkConsumed = {
+                        pendingOpenRoute = null
+                        pendingTargetId = null
+                    }
                 )
             }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        extractNotificationDeepLink(intent)
+    }
+
+    private fun extractNotificationDeepLink(intent: Intent?) {
+        val openRoute = intent?.getStringExtra("open_route")?.takeIf { it.isNotBlank() }
+        val targetId = intent?.getStringExtra("target_id")?.takeIf { it.isNotBlank() }
+        if (openRoute != null) {
+            pendingOpenRoute = openRoute
+            pendingTargetId = targetId
         }
     }
 }

@@ -1,10 +1,10 @@
 {
   "name": "roktosetu-functions",
-  "description": "LifeLink Blood Connect Trusted Cloud Functions",
+  "description": "RoktoSetu Trusted Cloud Functions",
   "version": "1.0.0",
   "main": "index.js",
   "engines": {
-    "node": "18"
+    "node": "20"
   },
   "dependencies": {
     "firebase-admin": "^12.0.0",

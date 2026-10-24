@@ -26,4 +26,19 @@
     <string name="verification_upload_submit">Upload &amp; Submit</string>
     <string name="donor_card_saved_success">Donor card PNG saved to Pictures/RoktoSetu!</string>
     <string name="donor_card_saved_error">Could not save donor card image.</string>
+
+    <!-- Admin Announcement Banner Strings -->
+    <string name="announcement_banner_header">Official Announcements</string>
+    <string name="announcement_dismiss_desc">Dismiss announcement</string>
+    <string name="announcement_category_emergency">Emergency</string>
+    <string name="announcement_category_maintenance">Maintenance</string>
+    <string name="announcement_category_campaign">Campaign</string>
+    <string name="announcement_category_general">Notice</string>
+    <string name="announcement_target_all">All Users</string>
+    <string name="announcement_target_donors">Donors Only</string>
+    <string name="announcement_target_verified_donors">Verified Donors</string>
+    <string name="announcement_target_organizations">Organizations</string>
+    <string name="announcement_target_district_format">District: %1$s</string>
+    <string name="btn_retry">Try Again</string>
 </resources>
+

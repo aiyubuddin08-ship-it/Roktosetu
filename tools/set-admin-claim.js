@@ -112,7 +112,6 @@ async function main() {
     await db.collection('users').doc(cleanUid).set(
       {
         role: 'SUPER_ADMIN',
-        verificationStatus: 'VERIFIED',
         updatedAt: now,
       },
       { merge: true }

@@ -70,11 +70,19 @@ class RoktoSetuMessagingService : FirebaseMessagingService() {
             ?: remoteMessage.data["body"]
             ?: getString(R.string.fcm_default_notification_body)
         val type = remoteMessage.data["type"] ?: "GENERAL"
+        val requestId = remoteMessage.data["requestId"] ?: remoteMessage.data["targetId"] ?: ""
+        val conversationId = remoteMessage.data["conversationId"] ?: ""
 
-        showNotification(title, body, type)
+        showNotification(title, body, type, requestId, conversationId)
     }
 
-    private fun showNotification(title: String, body: String, type: String) {
+    private fun showNotification(
+        title: String,
+        body: String,
+        type: String,
+        requestId: String = "",
+        conversationId: String = ""
+    ) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             val granted = ContextCompat.checkSelfPermission(
                 applicationContext,
@@ -86,14 +94,28 @@ class RoktoSetuMessagingService : FirebaseMessagingService() {
             }
         }
 
+        val openRoute = when {
+            type.contains("CHAT", ignoreCase = true) || conversationId.isNotBlank() -> "chat_list"
+            requestId.isNotBlank() || type.contains("EMERGENCY", ignoreCase = true) || type.contains("REQUEST", ignoreCase = true) -> "request_details"
+            else -> ""
+        }
+
         val launchIntent = Intent(applicationContext, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
             putExtra("notification_type", type)
+            if (openRoute.isNotBlank()) {
+                putExtra("open_route", openRoute)
+            }
+            if (requestId.isNotBlank()) {
+                putExtra("target_id", requestId)
+            } else if (conversationId.isNotBlank()) {
+                putExtra("target_id", conversationId)
+            }
         }
         val pendingIntentFlags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         val pendingIntent = PendingIntent.getActivity(
             applicationContext,
-            type.hashCode(),
+            (type + requestId + conversationId).hashCode(),
             launchIntent,
             pendingIntentFlags
         )

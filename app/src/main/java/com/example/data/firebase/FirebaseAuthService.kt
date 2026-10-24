@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import com.example.R
 import com.example.domain.LocationHelper
+import com.example.model.AccountStatus
 import com.example.model.AuthState
 import com.example.model.BloodGroup
 import com.example.model.DonorAvailability
@@ -142,6 +143,12 @@ class FirebaseAuthService(
                 return
             }
 
+            if (profile.accountStatus == AccountStatus.SUSPENDED && profile.role != UserRole.SUPER_ADMIN) {
+                _currentUserProfile.value = profile
+                _authState.value = AuthState.AccountDisabled
+                return
+            }
+
             _currentUserProfile.value = profile
             _authState.value = AuthState.Authenticated
             syncFcmToken(refreshedUser.uid, profile.fcmToken)
@@ -172,9 +179,11 @@ class FirebaseAuthService(
      * if it differs from the stored token.
      */
     suspend fun syncFcmToken(uid: String = currentUserId ?: "", existingToken: String? = null) {
-        if (uid.isBlank()) return
+        if (uid.isBlank() || !existingToken.isNullOrBlank()) return
         try {
-            val token = FirebaseMessaging.getInstance().token.await()
+            val messaging = FirebaseMessaging.getInstance()
+            if (!messaging.isAutoInitEnabled) return
+            val token = messaging.token.await()
             if (token.isNotBlank() && token != existingToken) {
                 firestore.collection("users").document(uid)
                     .update(
@@ -197,20 +206,47 @@ class FirebaseAuthService(
      * `/admins/{uid}` document existence in Firestore.
      */
     suspend fun isCurrentUserAdmin(forceRefreshToken: Boolean = true): Boolean {
-        val user = auth.currentUser ?: return false
+        return verifyAdminStatusDetailed(forceRefreshToken).isVerifiedAdmin
+    }
+
+    /**
+     * Performs a detailed server-backed verification of the current user's administrator privileges.
+     */
+    suspend fun verifyAdminStatusDetailed(forceRefreshToken: Boolean = true): AdminVerificationResult {
+        val user = auth.currentUser ?: return AdminVerificationResult(
+            isAuthenticated = false,
+            uid = "",
+            email = "",
+            displayName = "",
+            hasAdminCustomClaim = false,
+            hasAdminRegistryDoc = false,
+            isVerifiedAdmin = false,
+            checkedAt = System.currentTimeMillis()
+        )
+
         val hasAdminClaim = try {
             val tokenResult = user.getIdToken(forceRefreshToken).await()
             tokenResult.claims["admin"] == true
         } catch (_: Exception) {
             false
         }
-        if (hasAdminClaim) return true
 
-        return try {
+        val hasAdminDoc = try {
             firestore.collection("admins").document(user.uid).get().await().exists()
         } catch (_: Exception) {
             false
         }
+
+        return AdminVerificationResult(
+            isAuthenticated = true,
+            uid = user.uid,
+            email = user.email ?: _currentUserProfile.value?.email ?: "",
+            displayName = _currentUserProfile.value?.name?.ifBlank { user.displayName ?: "" } ?: (user.displayName ?: ""),
+            hasAdminCustomClaim = hasAdminClaim,
+            hasAdminRegistryDoc = hasAdminDoc,
+            isVerifiedAdmin = hasAdminClaim || hasAdminDoc,
+            checkedAt = System.currentTimeMillis()
+        )
     }
 
     /**
@@ -352,7 +388,7 @@ class FirebaseAuthService(
      */
     suspend fun signInWithGoogleCredential(idToken: String): Resource<UserProfile> {
         if (idToken.isBlank()) {
-            return Resource.Error("Google সাইন-ইন টোকেন পাওয়া যায়নি (Invalid Google ID token).")
+            return Resource.Error("Google সাইন-ইন তথ্য পাওয়া যায়নি। অনুগ্রহ করে আবার চেষ্টা করুন।")
         }
         return try {
             val credential = GoogleAuthProvider.getCredential(idToken, null)
@@ -500,6 +536,26 @@ class FirebaseAuthService(
         }
     }
 
+    val isEmailVerified: Boolean
+        get() = auth.currentUser?.isEmailVerified == true
+
+    suspend fun changePassword(currentPass: String, newPass: String): Resource<Unit> {
+        val user = auth.currentUser ?: return Resource.Error("পাসওয়ার্ড পরিবর্তন করতে অনুগ্রহ করে লগইন করুন।")
+        val email = user.email ?: return Resource.Error("আপনার অ্যাকাউন্টের ইমেইল পাওয়া যায়নি।")
+        val ruleError = validatePasswordRules(newPass)
+        if (ruleError != null) {
+            return Resource.Error(ruleError)
+        }
+        return try {
+            val credential = EmailAuthProvider.getCredential(email, currentPass)
+            user.reauthenticate(credential).await()
+            user.updatePassword(newPass).await()
+            Resource.Success(Unit)
+        } catch (e: Exception) {
+            Resource.Error(mapFirebaseException(e), e)
+        }
+    }
+
     suspend fun updateProfile(updated: UserProfile): Resource<UserProfile> {
         val user = auth.currentUser
             ?: return Resource.Error("প্রোফাইল আপডেট করতে লগইন করা আবশ্যক (You must be signed in to update your profile).")
@@ -594,14 +650,14 @@ class FirebaseAuthService(
                     area = area,
                     city = district
                 ),
-                verificationStatus = if (isServerAdmin) {
-                    VerificationStatus.VERIFIED
-                } else {
-                    runCatching {
-                        VerificationStatus.valueOf(doc.getString("verificationStatus") ?: "UNVERIFIED")
-                    }.getOrDefault(VerificationStatus.UNVERIFIED)
-                },
+                verificationStatus = runCatching {
+                    VerificationStatus.valueOf(doc.getString("verificationStatus") ?: "UNVERIFIED")
+                }.getOrDefault(VerificationStatus.UNVERIFIED),
                 role = if (isServerAdmin) UserRole.SUPER_ADMIN else storedRole,
+                accountStatus = runCatching {
+                    AccountStatus.valueOf(doc.getString("accountStatus") ?: "ACTIVE")
+                }.getOrDefault(AccountStatus.ACTIVE),
+                suspensionReason = doc.getString("suspensionReason"),
                 organizationId = doc.getString("organizationId"),
                 donationCount = (doc.getLong("donationCount") ?: 0L).toInt(),
                 badges = (doc.get("badges") as? List<*>)?.mapNotNull { it as? String } ?: emptyList(),
@@ -658,6 +714,15 @@ class FirebaseAuthService(
     }
 
     fun signOut() {
+        val uid = auth.currentUser?.uid
+        if (!uid.isNullOrBlank()) {
+            try {
+                firestore.collection("users").document(uid)
+                    .update("fcmToken", "")
+            } catch (_: Exception) {
+                // Best effort before signOut
+            }
+        }
         prefs?.edit()?.clear()?.apply()
         _currentUserProfile.value = null
         _authState.value = AuthState.Unauthenticated
@@ -724,3 +789,15 @@ class FirebaseAuthService(
         }
     }
 }
+
+data class AdminVerificationResult(
+    val isAuthenticated: Boolean,
+    val uid: String,
+    val email: String,
+    val displayName: String,
+    val hasAdminCustomClaim: Boolean,
+    val hasAdminRegistryDoc: Boolean,
+    val isVerifiedAdmin: Boolean,
+    val checkedAt: Long
+)
+

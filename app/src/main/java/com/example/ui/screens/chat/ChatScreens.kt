@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -20,8 +21,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Chat
+import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -43,6 +44,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -52,12 +54,11 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.model.ChatMessage
-import com.example.model.Conversation
-import com.example.ui.theme.BloodGold
-import com.example.ui.theme.BloodRed
+import com.example.ui.components.ReportSubmissionDialog
+import com.example.ui.theme.EmergencyRed
 import com.example.ui.viewmodel.AuthViewModel
 import com.example.ui.viewmodel.ChatViewModel
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -89,12 +90,12 @@ fun ChatListScreen(
                 title = {
                     Column {
                         Text("Direct Messages", fontWeight = FontWeight.Bold)
-                        Text("ব্যক্তিগত যোগাযোগ • Participant Isolated", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                        Text("ব্যক্তিগত যোগাযোগ • সুরক্ষিত বার্তা", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
                     }
                 },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.Default.ArrowBack, contentDescription = "ফিরে যান")
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface)
@@ -114,7 +115,7 @@ fun ChatListScreen(
                     Icon(Icons.Default.Lock, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(14.dp))
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = "Encrypted 1-to-1 conversation between donor and patient",
+                        text = "রক্তদাতা ও রোগীর মধ্যকার ১-টু-১ ব্যক্তিগত কথোপকথন",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -133,9 +134,9 @@ fun ChatListScreen(
                         ) {
                             Icon(Icons.Default.Chat, contentDescription = null, tint = MaterialTheme.colorScheme.outline, modifier = Modifier.size(40.dp))
                             Spacer(modifier = Modifier.height(8.dp))
-                            Text("No chats active yet", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold))
+                            Text("এখনো কোনো কথোপকথন শুরু হয়নি", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold))
                             Text(
-                                text = "You can initiate a direct conversation by clicking 'Chat' on any donor or requester profile.",
+                                text = "রক্তদাতা তালিকা বা রক্তের অনুরোধ থেকে 'চ্যাট' বাটনে চাপ দিয়ে সরাসরি মেসেজ পাঠাতে পারেন।",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.padding(top = 4.dp)
@@ -144,10 +145,10 @@ fun ChatListScreen(
                     }
                 }
             } else {
-                items(chatState.conversations) { conv ->
+                items(chatState.conversations, key = { it.id }) { conv ->
                     val myUid = myProfile?.uid ?: ""
                     val otherUid = conv.participants.firstOrNull { it != myUid } ?: ""
-                    val otherName = conv.participantNames[otherUid] ?: "Donor / User"
+                    val otherName = conv.participantNames[otherUid] ?: "রক্তদাতা / ব্যবহারকারী"
                     val otherBlood = conv.participantBloodGroups[otherUid] ?: "Blood Donor"
 
                     Card(
@@ -215,11 +216,17 @@ fun ChatConversationScreen(
     authViewModel: AuthViewModel,
     onNavigateBack: () -> Unit
 ) {
+    val scope = rememberCoroutineScope()
     val chatState by chatViewModel.uiState.collectAsState()
     val myProfile by authViewModel.currentUserProfile.collectAsState()
     var messageText by remember { mutableStateOf("") }
+    var showReportDialog by remember { mutableStateOf(false) }
     val sdf = remember { SimpleDateFormat("hh:mm a", Locale.getDefault()) }
     val snackbarHostState = remember { SnackbarHostState() }
+
+    val activeConversation = chatState.conversations.firstOrNull { it.id == conversationId }
+    val myUid = myProfile?.uid ?: ""
+    val otherUid = activeConversation?.participants?.firstOrNull { it != myUid } ?: conversationId
 
     LaunchedEffect(conversationId) {
         chatViewModel.openConversation(conversationId)
@@ -232,6 +239,31 @@ fun ChatConversationScreen(
         }
     }
 
+    if (showReportDialog) {
+        ReportSubmissionDialog(
+            currentUserUid = myProfile?.uid,
+            initialTargetUid = otherUid,
+            initialTargetName = otherName,
+            initialTargetType = "CHAT",
+            targetOwnerUid = otherUid,
+            lockTarget = true,
+            onDismiss = { showReportDialog = false },
+            onSubmit = { tUid, tName, tType, cat, reasonBn, details ->
+                showReportDialog = false
+                authViewModel.submitUserReport(
+                    targetUid = tUid,
+                    targetName = tName,
+                    targetType = tType,
+                    category = cat,
+                    reasonBn = reasonBn,
+                    details = details
+                ) { _, msg ->
+                    scope.launch { snackbarHostState.showSnackbar(msg) }
+                }
+            }
+        )
+    }
+
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
@@ -240,7 +272,7 @@ fun ChatConversationScreen(
                     Column {
                         Text(otherName, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
                         Text(
-                            text = "Blood Group: $otherBloodGroup • Direct Secure Line",
+                            text = "রক্তের গ্রুপ: $otherBloodGroup • ব্যক্তিগত বার্তা",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.primary
                         )
@@ -248,7 +280,19 @@ fun ChatConversationScreen(
                 },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.Default.ArrowBack, contentDescription = "ফিরে যান")
+                    }
+                },
+                actions = {
+                    IconButton(
+                        onClick = { showReportDialog = true },
+                        modifier = Modifier.testTag("btn_report_chat")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Flag,
+                            contentDescription = "কথোপকথন রিপোর্ট করুন",
+                            tint = EmergencyRed
+                        )
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface)
@@ -259,6 +303,7 @@ fun ChatConversationScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
+                .imePadding()
         ) {
             LazyColumn(
                 modifier = Modifier
@@ -275,7 +320,7 @@ fun ChatConversationScreen(
                             shape = RoundedCornerShape(12.dp)
                         ) {
                             Text(
-                                text = "🔒 Messages are participant-isolated under strict Firestore security rules.",
+                                text = "🔒 এই কথোপকথনটি ব্যক্তিগত ও সুরক্ষিত — শুধুমাত্র আপনি এবং প্রাপক বার্তা দেখতে পারেন।",
                                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -285,7 +330,7 @@ fun ChatConversationScreen(
                     Spacer(modifier = Modifier.height(8.dp))
                 }
 
-                items(chatState.messages) { msg ->
+                items(chatState.messages, key = { it.id.ifBlank { "${it.senderUid}_${it.timestamp}" } }) { msg ->
                     val isMe = msg.senderUid == (myProfile?.uid ?: "")
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -320,7 +365,6 @@ fun ChatConversationScreen(
                 }
             }
 
-            // Message Input Bar
             Surface(
                 color = MaterialTheme.colorScheme.surface,
                 tonalElevation = 4.dp,
@@ -335,7 +379,7 @@ fun ChatConversationScreen(
                     OutlinedTextField(
                         value = messageText,
                         onValueChange = { messageText = it },
-                        placeholder = { Text("Write a message...") },
+                        placeholder = { Text("বার্তা লিখুন...") },
                         modifier = Modifier.weight(1f).testTag("input_chat_message"),
                         shape = RoundedCornerShape(24.dp),
                         singleLine = true
@@ -349,12 +393,12 @@ fun ChatConversationScreen(
                             }
                         },
                         modifier = Modifier
-                            .size(46.dp)
+                            .size(48.dp)
                             .clip(CircleShape)
                             .background(MaterialTheme.colorScheme.primary)
                             .testTag("btn_send_chat_message")
                     ) {
-                        Icon(Icons.Default.Send, contentDescription = "Send", tint = Color.White, modifier = Modifier.size(20.dp))
+                        Icon(Icons.Default.Send, contentDescription = "পাঠান", tint = Color.White, modifier = Modifier.size(20.dp))
                     }
                 }
             }

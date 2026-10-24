@@ -6,6 +6,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.data.firebase.FirebaseAuthService
+import com.example.data.firebase.FirebaseSecurityHelper
 import com.example.data.firebase.Resource
 import com.example.data.repository.RoktoSetuRepository
 import com.example.model.AuthState
@@ -13,6 +14,7 @@ import com.example.model.BloodGroup
 import com.example.model.DonorAvailability
 import com.example.model.RegistrationValidationResult
 import com.example.model.UserProfile
+import com.example.model.UserReport
 import com.example.model.VerificationStatus
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -26,7 +28,8 @@ data class AuthUiState(
     val errorMessage: String? = null,
     val successMessage: String? = null,
     val resendCooldownSeconds: Int = 0,
-    val requiresReauthForDelete: Boolean = false
+    val requiresReauthForDelete: Boolean = false,
+    val myReports: List<UserReport> = emptyList()
 )
 
 class AuthViewModel(
@@ -40,6 +43,24 @@ class AuthViewModel(
     val currentUserProfile: StateFlow<UserProfile?> = repository.currentUserProfile
 
     private var cooldownJob: Job? = null
+    private var myReportsJob: Job? = null
+
+    init {
+        viewModelScope.launch {
+            repository.currentUserProfile.collect { profile ->
+                myReportsJob?.cancel()
+                if (profile != null) {
+                    myReportsJob = viewModelScope.launch {
+                        repository.getMyReports().collect { reports ->
+                            _uiState.value = _uiState.value.copy(myReports = reports)
+                        }
+                    }
+                } else {
+                    _uiState.value = _uiState.value.copy(myReports = emptyList())
+                }
+            }
+        }
+    }
 
     private fun isValidEmailFormat(email: String): Boolean {
         val trimmed = email.trim()
@@ -109,8 +130,7 @@ class AuthViewModel(
     }
 
     /**
-     * Validates and registers a new user with strict password and form rules.
-     * Never assigns privileged roles, verified status, or automatic emergency donor flags.
+     * Validates and registers a new user with strict password and Bangladeshi phone rules.
      */
     fun register(
         name: String,
@@ -175,7 +195,7 @@ class AuthViewModel(
     }
 
     /**
-     * Completes registration input validation using the shared password policy.
+     * Completes registration input validation using the shared password policy and BD phone regex.
      */
     fun validateRegistrationInput(
         name: String,
@@ -205,8 +225,8 @@ class AuthViewModel(
         }
 
         val trimmedPhone = phone.trim()
-        if (trimmedPhone.length < 8) {
-            phoneError = "Please enter a valid phone number"
+        if (!FirebaseSecurityHelper.isValidPhoneNumber(trimmedPhone)) {
+            phoneError = "অনুগ্রহ করে সঠিক বাংলাদেশি মোবাইল নম্বর দিন (যেমন 017XXXXXXXX বা +88017XXXXXXXX)"
             isValid = false
         }
 
@@ -257,7 +277,7 @@ class AuthViewModel(
     }
 
     /**
-     * Checks email verification status by reloading user from Firebase Auth.
+     * Checks email verification status by reloading user.
      */
     fun checkEmailVerification(onVerified: () -> Unit = {}) {
         viewModelScope.launch {
@@ -350,9 +370,9 @@ class AuthViewModel(
         photoUrl: String = "",
         onSuccess: () -> Unit = {}
     ) {
-        if (name.trim().length < 2 || phone.trim().length < 8) {
+        if (name.trim().length < 2 || !FirebaseSecurityHelper.isValidPhoneNumber(phone.trim())) {
             _uiState.value = _uiState.value.copy(
-                errorMessage = "অনুগ্রহ করে আপনার পূর্ণ নাম এবং সঠিক মোবাইল নম্বর দিন (Please provide your full name and valid contact phone)"
+                errorMessage = "অনুগ্রহ করে আপনার পূর্ণ নাম এবং সঠিক বাংলাদেশি মোবাইল নম্বর দিন (যেমন 017XXXXXXXX)"
             )
             return
         }
@@ -452,10 +472,6 @@ class AuthViewModel(
         }
     }
 
-    /**
-     * Uploads a user-selected document (PDF/Image <= 10 MB) to Firebase Storage at
-     * `/verifications/{uid}/{docId}` and submits the verification request to Firestore.
-     */
     fun uploadAndSubmitVerificationRequest(
         context: Context,
         fileUri: Uri?,
@@ -516,6 +532,50 @@ class AuthViewModel(
         }
     }
 
+    /**
+     * Phase 3: Submit a user report against a fake request, donor/user misconduct, or chat issue.
+     */
+    fun submitUserReport(
+        targetUid: String,
+        targetName: String,
+        targetType: String,
+        category: String,
+        reasonBn: String,
+        details: String,
+        onResult: (Boolean, String) -> Unit = { _, _ -> }
+    ) {
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isLoading = true, errorMessage = null, successMessage = null)
+            when (
+                val res = repository.submitUserReport(
+                    targetUid = targetUid,
+                    targetName = targetName,
+                    targetType = targetType,
+                    category = category,
+                    reasonBn = reasonBn,
+                    details = details
+                )
+            ) {
+                is Resource.Success -> {
+                    val thankYou = "ধন্যবাদ! আপনার অভিযোগটি সফলভাবে গ্রহণ করা হয়েছে। প্রশাসক দল শীঘ্রই এটি পর্যালোচনা করবে।"
+                    _uiState.value = _uiState.value.copy(
+                        isLoading = false,
+                        successMessage = thankYou
+                    )
+                    onResult(true, thankYou)
+                }
+                is Resource.Error -> {
+                    _uiState.value = _uiState.value.copy(
+                        isLoading = false,
+                        errorMessage = res.message
+                    )
+                    onResult(false, res.message)
+                }
+                is Resource.Loading -> {}
+            }
+        }
+    }
+
     fun reportError(message: String) {
         _uiState.value = _uiState.value.copy(errorMessage = message)
     }
@@ -548,6 +608,46 @@ class AuthViewModel(
                         requiresReauthForDelete = needsReauth,
                         errorMessage = res.message
                     )
+                }
+                is Resource.Loading -> {}
+            }
+        }
+    }
+
+    val isEmailVerified: Boolean
+        get() = repository.isEmailVerified
+
+    fun changePassword(
+        currentPass: String,
+        newPass: String,
+        confirmPass: String,
+        onSuccess: () -> Unit = {}
+    ) {
+        if (currentPass.isBlank()) {
+            _uiState.value = _uiState.value.copy(errorMessage = "অনুগ্রহ করে আপনার বর্তমান পাসওয়ার্ড দিন।")
+            return
+        }
+        val ruleError = FirebaseAuthService.validatePasswordRules(newPass)
+        if (ruleError != null) {
+            _uiState.value = _uiState.value.copy(errorMessage = ruleError)
+            return
+        }
+        if (newPass != confirmPass) {
+            _uiState.value = _uiState.value.copy(errorMessage = "নতুন পাসওয়ার্ড দুটি মিলছে না।")
+            return
+        }
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isLoading = true, errorMessage = null, successMessage = null)
+            when (val res = repository.changePassword(currentPass, newPass)) {
+                is Resource.Success -> {
+                    _uiState.value = _uiState.value.copy(
+                        isLoading = false,
+                        successMessage = "আপনার পাসওয়ার্ড সফলভাবে পরিবর্তন করা হয়েছে।"
+                    )
+                    onSuccess()
+                }
+                is Resource.Error -> {
+                    _uiState.value = _uiState.value.copy(isLoading = false, errorMessage = res.message)
                 }
                 is Resource.Loading -> {}
             }

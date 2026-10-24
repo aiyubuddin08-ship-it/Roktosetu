@@ -30,6 +30,12 @@
 -keep class com.example.data.local.** { *; }
 -dontwarn androidx.room.paging.**
 
+# Jetpack Credential Manager & Google Identity Services (GoogleId)
+-keep class androidx.credentials.** { *; }
+-keep class com.google.android.libraries.identity.googleid.** { *; }
+-dontwarn androidx.credentials.**
+-dontwarn com.google.android.libraries.identity.googleid.**
+
 # Firebase Firestore & Google Play Services rules
 -keepclassmembers class * {
     @com.google.firebase.firestore.PropertyName <fields>;

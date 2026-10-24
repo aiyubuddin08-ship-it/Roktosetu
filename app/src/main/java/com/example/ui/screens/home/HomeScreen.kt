@@ -93,8 +93,14 @@ import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.QrCode
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.WifiOff
+import android.util.Log
+import androidx.compose.material3.IconButton
+import androidx.compose.ui.res.stringResource
+import com.example.R
 import com.example.model.AppLanguage
+import com.example.model.SystemAnnouncement
 import com.example.ui.theme.BloodGold
+import com.example.ui.theme.BloodPendingAmber
 import com.example.ui.theme.BloodRed
 import com.example.ui.theme.BloodSuccessContainer
 import com.example.ui.theme.BloodSuccessGreen
@@ -103,6 +109,9 @@ import com.example.ui.theme.EmergencyRedContainer
 import com.example.ui.viewmodel.AuthViewModel
 import com.example.ui.viewmodel.BloodViewModel
 import com.example.ui.viewmodel.ExtraFeaturesViewModel
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -151,8 +160,8 @@ fun HomeScreen(
             if (!hasPermission) {
                 try {
                     notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                } catch (_: Exception) {
-                    // Safely ignore in headless test environments without an ActivityResultRegistry
+                } catch (e: Exception) {
+                    Log.w("HomeScreen", "Notification permission launcher skipped: ${e.message}")
                 }
             }
         }
@@ -224,6 +233,19 @@ fun HomeScreen(
                 .padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
+            if (bloodState.announcements.isNotEmpty()) {
+                item {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    HomeAnnouncementsBannerSection(
+                        announcements = bloodState.announcements.take(3),
+                        isBangla = isBangla,
+                        onDismiss = { announcementId ->
+                            bloodViewModel.dismissAnnouncement(announcementId)
+                        }
+                    )
+                }
+            }
+
             item {
                 Spacer(modifier = Modifier.height(4.dp))
                 // Emergency Quick CTA Card
@@ -770,14 +792,22 @@ fun HomeScreen(
                             )
                             Spacer(modifier = Modifier.height(8.dp))
                             Text(
-                                text = "No active requests right now",
+                                text = if (isBangla) "বর্তমানে কোনো সক্রিয় রক্তের আবেদন নেই" else "No active requests right now",
                                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Medium)
                             )
                             Text(
-                                text = "All patients in your area have received assistance.",
+                                text = if (isBangla) "আপনার এলাকার সকল রোগী সহায়তা পেয়েছেন।" else "All patients in your area have received assistance.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
+                            Spacer(modifier = Modifier.height(10.dp))
+                            OutlinedButton(
+                                onClick = { bloodViewModel.retryLoad() },
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.testTag("btn_retry_home_requests")
+                            ) {
+                                Text(if (isBangla) "আবার চেষ্টা করুন" else stringResource(R.string.btn_retry))
+                            }
                         }
                     }
                 }
@@ -797,6 +827,26 @@ fun HomeScreen(
                             onNavigateToRequestDetails(req.id)
                         }
                     )
+                }
+
+                if (bloodState.hasMoreRequests) {
+                    item {
+                        OutlinedButton(
+                            onClick = { bloodViewModel.loadMoreRequests() },
+                            enabled = !bloodState.isLoadingMoreRequests,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 8.dp)
+                                .height(48.dp)
+                                .testTag("btn_load_more_requests"),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Text(
+                                text = if (bloodState.isLoadingMoreRequests) "লোড হচ্ছে..." else "আরও অনুরোধ দেখুন",
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
                 }
             }
 
@@ -858,3 +908,181 @@ fun QuickActionTile(
         }
     }
 }
+
+@Composable
+fun HomeAnnouncementsBannerSection(
+    announcements: List<SystemAnnouncement>,
+    isBangla: Boolean,
+    onDismiss: (String) -> Unit
+) {
+    val sdf = remember { SimpleDateFormat("dd MMM, hh:mm a", Locale.getDefault()) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("section_home_announcements"),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.Campaign,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = if (isBangla) "প্রশাসনিক ঘোষণা" else stringResource(R.string.announcement_banner_header),
+                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+            Text(
+                text = "${announcements.size}/3",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
+        announcements.forEach { ann ->
+            val isEmergency = ann.category.equals("EMERGENCY", ignoreCase = true)
+            val isMaintenance = ann.category.equals("MAINTENANCE", ignoreCase = true)
+            val isCampaign = ann.category.equals("CAMPAIGN", ignoreCase = true)
+
+            val containerColor = when {
+                isEmergency -> EmergencyRedContainer.copy(alpha = 0.85f)
+                isMaintenance -> BloodPendingAmber.copy(alpha = 0.14f)
+                isCampaign -> BloodSuccessContainer.copy(alpha = 0.7f)
+                else -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+            }
+            val accentColor = when {
+                isEmergency -> EmergencyRed
+                isMaintenance -> BloodPendingAmber
+                isCampaign -> BloodSuccessGreen
+                else -> MaterialTheme.colorScheme.primary
+            }
+            val categoryLabel = when {
+                isEmergency -> if (isBangla) "জরুরি" else stringResource(R.string.announcement_category_emergency)
+                isMaintenance -> if (isBangla) "রক্ষণাবেক্ষণ" else stringResource(R.string.announcement_category_maintenance)
+                isCampaign -> if (isBangla) "ক্যাম্পেইন" else stringResource(R.string.announcement_category_campaign)
+                else -> if (isBangla) "বিজ্ঞপ্তি" else stringResource(R.string.announcement_category_general)
+            }
+            val audienceLabel = when (ann.targetAudience.uppercase()) {
+                "ACTIVE_DONORS", "DONORS", "ONLY_DONORS" ->
+                    if (isBangla) "শুধু রক্তদাতাদের জন্য" else stringResource(R.string.announcement_target_donors)
+                "VERIFIED_DONORS" ->
+                    if (isBangla) "যাচাইকৃত রক্তদাতা" else stringResource(R.string.announcement_target_verified_donors)
+                "ORGANIZATIONS" ->
+                    if (isBangla) "প্রতিষ্ঠানসমূহ" else stringResource(R.string.announcement_target_organizations)
+                else ->
+                    if (isBangla) "সবার জন্য" else stringResource(R.string.announcement_target_all)
+            }
+
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, accentColor.copy(alpha = 0.35f), RoundedCornerShape(16.dp))
+                    .testTag("card_announcement_${ann.id}"),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = containerColor)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 14.dp, end = 6.dp, top = 10.dp, bottom = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Surface(
+                                color = accentColor,
+                                shape = RoundedCornerShape(6.dp)
+                            ) {
+                                Text(
+                                    text = categoryLabel,
+                                    color = Color.White,
+                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                )
+                            }
+                            Surface(
+                                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f),
+                                shape = RoundedCornerShape(6.dp)
+                            ) {
+                                Text(
+                                    text = audienceLabel,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                )
+                            }
+                            if (ann.targetDistrict.isNotBlank()) {
+                                Surface(
+                                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f),
+                                    shape = RoundedCornerShape(6.dp)
+                                ) {
+                                    Text(
+                                        text = if (isBangla) "জেলা: ${ann.targetDistrict}" else "District: ${ann.targetDistrict}",
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
+                        }
+
+                        IconButton(
+                            onClick = { onDismiss(ann.id) },
+                            modifier = Modifier
+                                .size(36.dp)
+                                .testTag("btn_dismiss_announcement_${ann.id}")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = if (isBangla) "ঘোষণা বন্ধ করুন" else stringResource(R.string.announcement_dismiss_desc),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+
+                    Text(
+                        text = ann.titleBn,
+                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.ExtraBold),
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.padding(end = 8.dp)
+                    )
+                    Text(
+                        text = ann.bodyBn,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(end = 8.dp)
+                    )
+                    val timestamp = ann.publishedAt ?: ann.createdAt
+                    if (timestamp > 0L) {
+                        Text(
+                            text = sdf.format(Date(timestamp)),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                            fontSize = 10.sp
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+

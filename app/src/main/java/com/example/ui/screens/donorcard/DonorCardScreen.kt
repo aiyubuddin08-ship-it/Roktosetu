@@ -14,6 +14,7 @@ import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import android.widget.Toast
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -35,7 +36,6 @@ import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.MilitaryTech
-import androidx.compose.material.icons.filled.QrCode
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Verified
 import androidx.compose.material3.Button
@@ -48,6 +48,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
@@ -64,6 +65,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -80,6 +82,9 @@ import com.example.ui.theme.BloodRed
 import com.example.ui.theme.BloodSuccessGreen
 import com.example.ui.viewmodel.AuthViewModel
 import com.example.ui.viewmodel.ExtraFeaturesViewModel
+import com.google.zxing.BarcodeFormat
+import com.google.zxing.EncodeHintType
+import com.google.zxing.qrcode.QRCodeWriter
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -97,11 +102,23 @@ fun DonorCardScreen(
 
     val name = currentUserProfile?.name?.ifBlank { null } ?: (if (isBangla) "স্বেচ্ছাসেবী রক্তদাতা" else "Voluntary Blood Donor")
     val bloodGroup = currentUserProfile?.bloodGroup ?: BloodGroup.O_POSITIVE
-    val donorId = currentUserProfile?.uid?.take(8)?.uppercase() ?: "RS-DONOR-01"
-    val city = currentUserProfile?.location?.city?.ifBlank { null } ?: "Dhaka"
+    val rawUid = currentUserProfile?.uid?.ifBlank { null } ?: "guest_donor"
+    val donorId = rawUid.take(8).uppercase()
+    val city = currentUserProfile?.location?.district?.ifBlank { currentUserProfile?.location?.city }?.ifBlank { null } ?: "Dhaka"
     val totalDonations = currentUserProfile?.donationCount ?: 0
     val verificationStatus = currentUserProfile?.verificationStatus ?: VerificationStatus.UNVERIFIED
     val isVerified = verificationStatus == VerificationStatus.VERIFIED
+
+    // Phase 8: Privacy-safe QR payload containing ONLY uid and verification code (never phone/email)
+    val verificationCode = remember(rawUid, verificationStatus, totalDonations) {
+        buildPrivacySafeVerificationCode(rawUid, verificationStatus.name, totalDonations)
+    }
+    val qrPayload = remember(rawUid, verificationCode) {
+        "ROKTOSETU:UID:$rawUid:CODE:$verificationCode"
+    }
+    val qrBitmap = remember(qrPayload) {
+        generateQrCodeBitmap(qrPayload, 240)
+    }
 
     Scaffold(
         topBar = {
@@ -121,7 +138,7 @@ fun DonorCardScreen(
                 },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.Default.ArrowBack, contentDescription = "ফিরে যান")
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface)
@@ -158,11 +175,10 @@ fun DonorCardScreen(
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 if (selectedTab == 0) {
-                    // Smart Donor Card View
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(240.dp)
+                            .height(256.dp)
                             .testTag("donor_card_widget"),
                         shape = RoundedCornerShape(22.dp),
                         elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
@@ -181,7 +197,6 @@ fun DonorCardScreen(
                                 modifier = Modifier.fillMaxSize(),
                                 verticalArrangement = Arrangement.SpaceBetween
                             ) {
-                                // Top row
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -191,8 +206,8 @@ fun DonorCardScreen(
                                         Icon(Icons.Default.Favorite, contentDescription = null, tint = Color.White, modifier = Modifier.size(24.dp))
                                         Spacer(modifier = Modifier.width(8.dp))
                                         Column {
-                                            Text("ROKTOSETU", color = Color.White, fontWeight = FontWeight.ExtraBold, letterSpacing = 1.sp, fontSize = 14.sp)
-                                            Text("LifeLink Blood Connect", color = Color.White.copy(alpha = 0.8f), fontSize = 10.sp)
+                                            Text("ROKTOSETU • রক্তসেতু", color = Color.White, fontWeight = FontWeight.ExtraBold, letterSpacing = 1.sp, fontSize = 14.sp)
+                                            Text("স্বেচ্ছায় রক্তদাতা পরিচয়পত্র", color = Color.White.copy(alpha = 0.8f), fontSize = 10.sp)
                                         }
                                     }
 
@@ -212,40 +227,48 @@ fun DonorCardScreen(
                                     }
                                 }
 
-                                // Middle row: Donor info
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(text = name, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                                        Text(text = "ID: $donorId • $city", color = Color.White.copy(alpha = 0.85f), fontSize = 12.sp)
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Text(text = "রক্তদান সংখ্যা: $totalDonations বার", color = BloodGold, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                    }
+
+                                    BloodGroupBadge(bloodGroup = bloodGroup, sizeInDp = 52)
+                                }
+
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Column {
-                                        Text(text = name, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                                        Text(text = "ID: $donorId • $city", color = Color.White.copy(alpha = 0.85f), fontSize = 12.sp)
-                                        Spacer(modifier = Modifier.height(4.dp))
-                                        Text(text = "Donations: $totalDonations Times Saved", color = BloodGold, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                        Text("যাচাই কোড: $verificationCode", color = Color.White.copy(alpha = 0.9f), fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                                        Text("গোপনীয়তা সুরক্ষিত QR (ফোন/ইমেইল ছাড়া)", color = Color.White.copy(alpha = 0.7f), fontSize = 10.sp)
                                     }
-
-                                    BloodGroupBadge(bloodGroup = bloodGroup, sizeInDp = 52)
-                                }
-
-                                // Bottom row: Chip & QR Simulation
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text("Valid Nationwide Bangladesh", color = Color.White.copy(alpha = 0.65f), fontSize = 10.sp)
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Icon(Icons.Default.QrCode, contentDescription = null, tint = Color.White, modifier = Modifier.size(28.dp))
-                                        Spacer(modifier = Modifier.width(6.dp))
-                                        Text("SCAN ID", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                    if (qrBitmap != null) {
+                                        Surface(
+                                            color = Color.White,
+                                            shape = RoundedCornerShape(8.dp),
+                                            modifier = Modifier.size(58.dp).testTag("donor_qr_code_image")
+                                        ) {
+                                            Image(
+                                                bitmap = qrBitmap.asImageBitmap(),
+                                                contentDescription = "রক্তদাতা যাচাই কিউআর কোড",
+                                                modifier = Modifier.fillMaxSize().padding(3.dp)
+                                            )
+                                        }
                                     }
                                 }
                             }
                         }
                     }
                 } else {
-                    // Certificate View
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -265,7 +288,7 @@ fun DonorCardScreen(
                                 textAlign = TextAlign.Center
                             )
                             Text(
-                                text = "LIFELINK VOLUNTARY BLOOD DONOR RECOGNITION",
+                                text = "VOLUNTARY BLOOD DONOR RECOGNITION",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 letterSpacing = 1.sp,
@@ -306,15 +329,15 @@ fun DonorCardScreen(
                                     Text(bloodGroup.display, fontWeight = FontWeight.Bold, color = BloodRed)
                                 }
                                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                    Text("Donor ID", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    Text(donorId, fontWeight = FontWeight.Bold)
+                                    Text("Verification Code", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text(verificationCode, fontWeight = FontWeight.Bold)
                                 }
                                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                     Text("Status", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                     val statusLabel = when (verificationStatus) {
-                                        VerificationStatus.VERIFIED -> if (isBangla) "যাচাইকৃত (Verified)" else "Verified"
-                                        VerificationStatus.PENDING -> if (isBangla) "বিবেচনাধীন (Pending)" else "Pending Review"
-                                        else -> if (isBangla) "অযাচাইকৃত (Unverified)" else "Unverified"
+                                        VerificationStatus.VERIFIED -> if (isBangla) "যাচাইকৃত" else "Verified"
+                                        VerificationStatus.PENDING -> if (isBangla) "বিবেচনাধীন" else "Pending"
+                                        else -> if (isBangla) "অযাচাইকৃত" else "Unverified"
                                     }
                                     val statusColor = if (isVerified) BloodSuccessGreen else MaterialTheme.colorScheme.onSurfaceVariant
                                     Text(statusLabel, fontWeight = FontWeight.Bold, color = statusColor)
@@ -324,7 +347,6 @@ fun DonorCardScreen(
                     }
                 }
 
-                // Action Buttons
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -336,7 +358,7 @@ fun DonorCardScreen(
                                 putExtra(Intent.EXTRA_SUBJECT, "RoktoSetu Digital Donor ID")
                                 putExtra(
                                     Intent.EXTRA_TEXT,
-                                    "I am a voluntary blood donor at RoktoSetu (রক্তসেতু)!\nName: $name\nBlood Group: ${bloodGroup.display}\nDonor ID: $donorId\nDonations: $totalDonations"
+                                    "আমি রক্তসেতু (RoktoSetu)-এর একজন স্বেচ্ছাসেবী রক্তদাতা!\nনাম: $name\nরক্তের গ্রুপ: ${bloodGroup.display}\nডোনার আইডি: $donorId\nযাচাই কোড: $verificationCode"
                                 )
                             }
                             context.startActivity(Intent.createChooser(shareIntent, "Share Donor Card"))
@@ -357,6 +379,8 @@ fun DonorCardScreen(
                                 name = name,
                                 bloodGroup = bloodGroup.display,
                                 donorId = donorId,
+                                verificationCode = verificationCode,
+                                qrBitmap = qrBitmap,
                                 city = city,
                                 totalDonations = totalDonations,
                                 isVerified = isVerified
@@ -383,11 +407,49 @@ fun DonorCardScreen(
     }
 }
 
+internal fun buildDonorQrPayload(profile: com.example.model.UserProfile): String {
+    val rawUid = profile.uid.ifBlank { "guest_donor" }
+    val code = buildPrivacySafeVerificationCode(rawUid, profile.verificationStatus.name, profile.donationCount)
+    return "ROKTOSETU:UID:$rawUid:CODE:$code"
+}
+
+internal fun buildPrivacySafeVerificationCode(
+    uid: String,
+    verificationStatusName: String,
+    donationCount: Int
+): String {
+    val raw = "$uid|$verificationStatusName|$donationCount|ROKTOSETU"
+    val hash = raw.hashCode().toUInt().toString(16).uppercase().padStart(8, '0')
+    return "RS-${hash.take(6)}"
+}
+
+internal fun generateQrCodeBitmap(payload: String, sizePx: Int = 240): Bitmap? {
+    return try {
+        val hints = mapOf(EncodeHintType.MARGIN to 1)
+        val bitMatrix = QRCodeWriter().encode(payload, BarcodeFormat.QR_CODE, sizePx, sizePx, hints)
+        val bmp = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
+        for (x in 0 until sizePx) {
+            for (y in 0 until sizePx) {
+                bmp.setPixel(
+                    x,
+                    y,
+                    if (bitMatrix[x, y]) android.graphics.Color.BLACK else android.graphics.Color.WHITE
+                )
+            }
+        }
+        bmp
+    } catch (_: Exception) {
+        null
+    }
+}
+
 private fun saveDonorCardBitmapToGallery(
     context: Context,
     name: String,
     bloodGroup: String,
     donorId: String,
+    verificationCode: String,
+    qrBitmap: Bitmap?,
     city: String,
     totalDonations: Int,
     isVerified: Boolean
@@ -430,33 +492,45 @@ private fun saveDonorCardBitmapToGallery(
             textSize = 54f
             typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
         }
-        canvas.drawText(name.take(28), 56f, 290f, namePaint)
+        canvas.drawText(name.take(28), 56f, 270f, namePaint)
 
         val infoPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = 0xEEFFFFFF.toInt()
-            textSize = 32f
+            textSize = 30f
         }
-        canvas.drawText("Donor ID: $donorId  •  City: $city", 56f, 350f, infoPaint)
+        canvas.drawText("Donor ID: $donorId  •  City: $city", 56f, 330f, infoPaint)
+        canvas.drawText("Verification Code: $verificationCode", 56f, 380f, infoPaint)
 
         val goldPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = 0xFFFFD54F.toInt()
             textSize = 32f
             typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
         }
-        canvas.drawText("Total Donations: $totalDonations", 56f, 410f, goldPaint)
+        canvas.drawText("Total Donations: $totalDonations", 56f, 440f, goldPaint)
 
         val badgeCirclePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = android.graphics.Color.WHITE
         }
-        canvas.drawCircle(width - 150f, 300f, 90f, badgeCirclePaint)
+        canvas.drawCircle(width - 150f, 180f, 75f, badgeCirclePaint)
 
         val bloodTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = 0xFFB71C1C.toInt()
-            textSize = 58f
+            textSize = 52f
             typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
             textAlign = Paint.Align.CENTER
         }
-        canvas.drawText(bloodGroup, width - 150f, 320f, bloodTextPaint)
+        canvas.drawText(bloodGroup, width - 150f, 198f, bloodTextPaint)
+
+        if (qrBitmap != null) {
+            val qrRect = RectF(width - 240f, 310f, width - 60f, 490f)
+            canvas.drawRoundRect(qrRect, 16f, 16f, badgeCirclePaint)
+            canvas.drawBitmap(
+                qrBitmap,
+                null,
+                RectF(width - 230f, 320f, width - 70f, 480f),
+                null
+            )
+        }
 
         val fileName = "RoktoSetu_Donor_${donorId}_${System.currentTimeMillis()}.png"
         val resolver = context.contentResolver

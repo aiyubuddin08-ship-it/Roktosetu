@@ -22,6 +22,7 @@ import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Emergency
 import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Login
@@ -346,7 +347,8 @@ fun PublicDonorItemCard(
     donor: PublicDonorView,
     onCallClick: () -> Unit,
     onChatClick: () -> Unit,
-    recipientBloodGroup: BloodGroup? = null
+    recipientBloodGroup: BloodGroup? = null,
+    onReportClick: (() -> Unit)? = null
 ) {
     val matchType = recipientBloodGroup?.let {
         BloodCompatibilityHelper.classifyDonorMatch(donor.bloodGroup, it)
@@ -387,7 +389,7 @@ fun PublicDonorItemCard(
                         Spacer(modifier = Modifier.width(4.dp))
                         Icon(
                             imageVector = Icons.Default.Verified,
-                            contentDescription = "Identity & Blood Group Verified by Admin",
+                            contentDescription = "যাচাইকৃত রক্তদাতা",
                             tint = BloodSuccessGreen,
                             modifier = Modifier.size(16.dp)
                         )
@@ -468,22 +470,22 @@ fun PublicDonorItemCard(
                 }
             }
 
-            Column(
-                horizontalAlignment = Alignment.End,
-                verticalArrangement = Arrangement.spacedBy(6.dp)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 if (donor.contactPhone.isNotBlank()) {
                     IconButton(
                         onClick = onCallClick,
                         modifier = Modifier
-                            .size(40.dp)
+                            .size(48.dp)
                             .clip(CircleShape)
                             .background(BloodSuccessContainer)
                             .testTag("btn_call_donor_${donor.uid}")
                     ) {
                         Icon(
                             imageVector = Icons.Default.Call,
-                            contentDescription = "Call Donor",
+                            contentDescription = "রক্তদাতাকে কল করুন",
                             tint = BloodSuccessGreen,
                             modifier = Modifier.size(20.dp)
                         )
@@ -493,17 +495,33 @@ fun PublicDonorItemCard(
                 IconButton(
                     onClick = onChatClick,
                     modifier = Modifier
-                        .size(40.dp)
+                        .size(48.dp)
                         .clip(CircleShape)
                         .background(MaterialTheme.colorScheme.primaryContainer)
                         .testTag("btn_chat_donor_${donor.uid}")
                 ) {
                     Icon(
                         imageVector = Icons.Default.Chat,
-                        contentDescription = "Chat with Donor",
+                        contentDescription = "রক্তদাতার সাথে চ্যাট করুন",
                         tint = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(20.dp)
                     )
+                }
+
+                if (onReportClick != null) {
+                    IconButton(
+                        onClick = onReportClick,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .testTag("btn_report_donor_${donor.uid}")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Flag,
+                            contentDescription = "রক্তদাতার বিরুদ্ধে রিপোর্ট করুন",
+                            tint = MaterialTheme.colorScheme.outline,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
                 }
             }
         }

@@ -336,3 +336,189 @@ test('Users & Campaigns: owner can transition verificationStatus to PENDING (not
 
   await assertSucceeds(aliceDb.doc('campaigns/camp_alice_1').set(validCampaign));
 });
+
+test('Reports collection: user can create valid report against others, cannot self-report or use invalid details/category, and can only read own reports while admin reads/updates all', async () => {
+  const aliceDb = testEnv.authenticatedContext('alice').firestore();
+  const bobDb = testEnv.authenticatedContext('bob').firestore();
+  const adminDb = testEnv.authenticatedContext('admin_user', { admin: true }).firestore();
+
+  const validReport = {
+    id: 'rep_1',
+    reporterUid: 'alice',
+    reporterEmail: 'alice@example.com',
+    targetId: 'bob',
+    targetType: 'USER',
+    category: 'HARASSMENT',
+    details: 'এই ব্যবহারকারী চ্যাটে অসদাচরণ করেছেন এবং ভুল তথ্য দিয়েছেন।',
+    status: 'OPEN',
+    createdAt: Date.now()
+  };
+
+  // Valid report succeeds
+  await assertSucceeds(aliceDb.doc('reports/rep_1').set(validReport));
+
+  // Self-report is forbidden
+  await assertFails(aliceDb.doc('reports/rep_self').set({
+    ...validReport,
+    id: 'rep_self',
+    targetId: 'alice'
+  }));
+
+  // Short details (< 10 chars) is forbidden
+  await assertFails(aliceDb.doc('reports/rep_short').set({
+    ...validReport,
+    id: 'rep_short',
+    details: 'Too short'
+  }));
+
+  // Invalid category is forbidden
+  await assertFails(aliceDb.doc('reports/rep_badcat').set({
+    ...validReport,
+    id: 'rep_badcat',
+    category: 'UNKNOWN_CATEGORY'
+  }));
+
+  // Reporter can read own report, Bob cannot read Alice's report, Admin can read and resolve
+  await assertSucceeds(aliceDb.doc('reports/rep_1').get());
+  await assertFails(bobDb.doc('reports/rep_1').get());
+  await assertSucceeds(adminDb.doc('reports/rep_1').get());
+  await assertSucceeds(adminDb.doc('reports/rep_1').update({
+    status: 'RESOLVED',
+    resolvedByUid: 'admin_user',
+    resolvedAt: Date.now()
+  }));
+});
+
+test('Blood Banks, Ambulances, Blood Camps & RSVPs: signed-in users can read, only admins can write directories, and users can only manage their own RSVP', async () => {
+  const aliceDb = testEnv.authenticatedContext('alice').firestore();
+  const bobDb = testEnv.authenticatedContext('bob').firestore();
+  const adminDb = testEnv.authenticatedContext('admin_user', { admin: true }).firestore();
+
+  const bankData = {
+    id: 'bb-1',
+    name: 'ঢাকা মেডিকেল কলেজ ব্লাড ব্যাংক',
+    division: 'Dhaka',
+    district: 'Dhaka',
+    city: 'Dhaka',
+    address: 'বকশীবাজার, ঢাকা',
+    contactPhone: '01711223344',
+    isOpen24Hours: true,
+    availableGroups: ['A_POSITIVE', 'O_POSITIVE'],
+    outOfStockGroups: ['AB_NEGATIVE'],
+    isVerified: true,
+    isActive: true,
+    updatedAt: Date.now()
+  };
+
+  const ambulanceData = {
+    id: 'amb-1',
+    serviceName: 'রেড ক্রিসেন্ট অ্যাম্বুলেন্স সার্ভিস',
+    vehicleType: 'ICU',
+    division: 'Dhaka',
+    district: 'Dhaka',
+    city: 'Dhaka',
+    area: 'মগবাজার',
+    driverPhone: '01811223344',
+    isAvailableNow: true,
+    fareType: 'স্বল্পমূল্য',
+    isActive: true,
+    updatedAt: Date.now()
+  };
+
+  const campData = {
+    id: 'camp-1',
+    title: 'ঢাকা বিশ্ববিদ্যালয় স্বেচ্ছায় রক্তদান ক্যাম্প',
+    organizer: 'বাঁধন',
+    division: 'Dhaka',
+    district: 'Dhaka',
+    venue: 'টিএসসি প্রাঙ্গণ, ঢাকা বিশ্ববিদ্যালয়',
+    city: 'Dhaka',
+    dateFormatted: '২৫ মে ২০২৬',
+    timeSlot: 'সকাল ৯:০০ - বিকাল ৪:০০',
+    targetDonors: 200,
+    registeredCount: 45,
+    contactPhone: '01911223344',
+    isActive: true,
+    updatedAt: Date.now()
+  };
+
+  // Non-admin cannot create blood bank, ambulance, or camp
+  await assertFails(aliceDb.doc('blood_banks/bb-1').set(bankData));
+  await assertFails(aliceDb.doc('ambulances/amb-1').set(ambulanceData));
+  await assertFails(aliceDb.doc('blood_camps/camp-1').set(campData));
+
+  // Admin can create all three
+  await assertSucceeds(adminDb.doc('blood_banks/bb-1').set(bankData));
+  await assertSucceeds(adminDb.doc('ambulances/amb-1').set(ambulanceData));
+  await assertSucceeds(adminDb.doc('blood_camps/camp-1').set(campData));
+
+  // Signed-in user can read all three
+  await assertSucceeds(aliceDb.doc('blood_banks/bb-1').get());
+  await assertSucceeds(aliceDb.doc('ambulances/amb-1').get());
+  await assertSucceeds(aliceDb.doc('blood_camps/camp-1').get());
+
+  // User cannot directly modify registeredCount on blood_camps
+  await assertFails(aliceDb.doc('blood_camps/camp-1').update({ registeredCount: 999 }));
+
+  // Alice can create and delete her own RSVP, but cannot create or delete Bob's RSVP
+  await assertSucceeds(aliceDb.doc('blood_camps/camp-1/rsvps/alice').set({
+    uid: 'alice',
+    campId: 'camp-1',
+    userName: 'Alice Rahman',
+    createdAt: Date.now()
+  }));
+  await assertFails(aliceDb.doc('blood_camps/camp-1/rsvps/bob').set({
+    uid: 'bob',
+    campId: 'camp-1',
+    userName: 'Bob',
+    createdAt: Date.now()
+  }));
+  await assertFails(bobDb.doc('blood_camps/camp-1/rsvps/alice').delete());
+  await assertSucceeds(aliceDb.doc('blood_camps/camp-1/rsvps/alice').delete());
+});
+
+test('10. Announcements and Security Alerts: Admin full access, users read published announcements only', async () => {
+  const adminDb = testEnv.authenticatedContext('admin_user', { admin: true }).firestore();
+  const aliceDb = testEnv.authenticatedContext('alice').firestore();
+
+  const publishedAnn = {
+    titleBn: 'জরুরি রক্তদান ক্যাম্প বিজ্ঞপ্তি',
+    bodyBn: 'আগামীকাল ঢাকা মেডিকেল কলেজে স্বেচ্ছায় রক্তদান কর্মসূচি অনুষ্ঠিত হবে।',
+    category: 'GENERAL',
+    targetAudience: 'ALL_USERS',
+    status: 'PUBLISHED',
+    createdByUid: 'admin_user',
+    createdAt: Date.now()
+  };
+
+  const draftAnn = {
+    ...publishedAnn,
+    status: 'DRAFT'
+  };
+
+  // Non-admin cannot create announcements
+  await assertFails(aliceDb.doc('announcements/ann-1').set(publishedAnn));
+
+  // Admin can create published and draft announcements
+  await assertSucceeds(adminDb.doc('announcements/ann-pub').set(publishedAnn));
+  await assertSucceeds(adminDb.doc('announcements/ann-draft').set(draftAnn));
+
+  // Signed-in user can read PUBLISHED announcement, but NOT DRAFT announcement
+  await assertSucceeds(aliceDb.doc('announcements/ann-pub').get());
+  await assertFails(aliceDb.doc('announcements/ann-draft').get());
+  await assertSucceeds(adminDb.doc('announcements/ann-draft').get());
+
+  // Security alerts: admin-only read/write
+  const alertDoc = {
+    alertType: 'SECURITY_EVENT',
+    severity: 'MEDIUM',
+    detectedAt: Date.now(),
+    reviewStatus: 'OPEN'
+  };
+  await assertFails(aliceDb.doc('security_alerts/alert-1').set(alertDoc));
+  await assertSucceeds(adminDb.doc('security_alerts/alert-1').set(alertDoc));
+  await assertFails(aliceDb.doc('security_alerts/alert-1').get());
+  await assertSucceeds(adminDb.doc('security_alerts/alert-1').get());
+});
+
+

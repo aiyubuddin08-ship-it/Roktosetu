@@ -26,6 +26,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
@@ -38,12 +39,15 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -56,13 +60,16 @@ import androidx.compose.ui.unit.sp
 import com.example.domain.BloodCompatibilityHelper
 import com.example.domain.LocationHelper
 import com.example.model.BloodGroup
+import com.example.model.PublicDonorView
 import com.example.ui.components.AuthRequiredDialog
 import com.example.ui.components.PublicDonorItemCard
+import com.example.ui.components.ReportSubmissionDialog
 import com.example.ui.components.RoktoTopAppBar
 import com.example.ui.theme.BloodSuccessGreen
 import com.example.ui.viewmodel.AuthViewModel
 import com.example.ui.viewmodel.BloodViewModel
 import com.example.ui.viewmodel.ChatViewModel
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -77,11 +84,14 @@ fun DonorDirectoryScreen(
     onNavigateToRegister: () -> Unit = {}
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val snackbarHostState = remember { SnackbarHostState() }
     val currentUserProfile by authViewModel.currentUserProfile.collectAsState()
     val bloodState by bloodViewModel.uiState.collectAsState()
 
     var nameOrAreaQuery by remember { mutableStateOf("") }
     var showAuthPromptDialog by remember { mutableStateOf(false) }
+    var donorToReport by remember { mutableStateOf<PublicDonorView?>(null) }
 
     var divisionExpanded by remember { mutableStateOf(false) }
     var districtExpanded by remember { mutableStateOf(false) }
@@ -105,24 +115,50 @@ fun DonorDirectoryScreen(
 
     val filteredDonors = bloodState.donors.filter { donor ->
         nameOrAreaQuery.isBlank() ||
-                donor.name.contains(nameOrAreaQuery, ignoreCase = true) ||
-                donor.generalLocation.contains(nameOrAreaQuery, ignoreCase = true) ||
-                donor.area.contains(nameOrAreaQuery, ignoreCase = true) ||
-                donor.upazila.contains(nameOrAreaQuery, ignoreCase = true) ||
-                donor.district.contains(nameOrAreaQuery, ignoreCase = true)
+            donor.name.contains(nameOrAreaQuery, ignoreCase = true) ||
+            donor.generalLocation.contains(nameOrAreaQuery, ignoreCase = true) ||
+            donor.area.contains(nameOrAreaQuery, ignoreCase = true) ||
+            donor.upazila.contains(nameOrAreaQuery, ignoreCase = true) ||
+            donor.district.contains(nameOrAreaQuery, ignoreCase = true)
     }
 
     if (showAuthPromptDialog) {
         AuthRequiredDialog(
-            title = "চ্যাট করতে সাইন ইন করুন",
-            message = "রক্তদাতার সাথে নিরাপদে ১-টু-১ চ্যাট বা মেসেজ পাঠাতে অনুগ্রহ করে আপনার একাউন্টে লগইন করুন বা রেজিস্ট্রেশন করুন।",
+            title = "সাইন ইন প্রয়োজন",
+            message = "রক্তদাতার সাথে যোগাযোগ বা অভিযোগ জানাতে অনুগ্রহ করে আপনার অ্যাকাউন্টে লগইন করুন।",
             onDismiss = { showAuthPromptDialog = false },
             onNavigateToLogin = onNavigateToLogin,
             onNavigateToRegister = onNavigateToRegister
         )
     }
 
+    donorToReport?.let { targetDonor ->
+        ReportSubmissionDialog(
+            currentUserUid = currentUserProfile?.uid,
+            initialTargetUid = targetDonor.uid,
+            initialTargetName = "${targetDonor.name} (${targetDonor.bloodGroup.display})",
+            initialTargetType = "DONOR",
+            targetOwnerUid = targetDonor.uid,
+            lockTarget = true,
+            onDismiss = { donorToReport = null },
+            onSubmit = { tUid, tName, tType, cat, reasonBn, details ->
+                donorToReport = null
+                authViewModel.submitUserReport(
+                    targetUid = tUid,
+                    targetName = tName,
+                    targetType = tType,
+                    category = cat,
+                    reasonBn = reasonBn,
+                    details = details
+                ) { _, msg ->
+                    scope.launch { snackbarHostState.showSnackbar(msg) }
+                }
+            }
+        )
+    }
+
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             RoktoTopAppBar(
                 title = "Donor Directory (রক্তদাতা তালিকা)",
@@ -142,14 +178,13 @@ fun DonorDirectoryScreen(
         ) {
             item {
                 Spacer(modifier = Modifier.height(4.dp))
-                // Search Input by Name / Area / Upazila
                 OutlinedTextField(
                     value = nameOrAreaQuery,
                     onValueChange = {
                         nameOrAreaQuery = it
                         bloodViewModel.setAreaSearchQuery(it)
                     },
-                    placeholder = { Text("Search by donor name, area, or upazila...") },
+                    placeholder = { Text("রক্তদাতার নাম, এলাকা বা উপজেলা দিয়ে খুঁজুন...") },
                     leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
                     trailingIcon = {
                         if (nameOrAreaQuery.isNotBlank()) {
@@ -157,7 +192,7 @@ fun DonorDirectoryScreen(
                                 nameOrAreaQuery = ""
                                 bloodViewModel.setAreaSearchQuery("")
                             }) {
-                                Icon(Icons.Default.Clear, contentDescription = "Clear")
+                                Icon(Icons.Default.Clear, contentDescription = "মুছুন")
                             }
                         }
                     },
@@ -169,7 +204,6 @@ fun DonorDirectoryScreen(
                 )
             }
 
-            // Blood Group Filter Chips
             item {
                 Text(
                     text = "Recipient / Required Blood Group (প্রয়োজনীয় রক্তের গ্রুপ):",
@@ -209,7 +243,6 @@ fun DonorDirectoryScreen(
                 }
             }
 
-            // Exact vs Medically Compatible & Availability Filter Row
             item {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -240,7 +273,6 @@ fun DonorDirectoryScreen(
                 }
             }
 
-            // Division, District, Upazila Location Filters
             item {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -286,7 +318,6 @@ fun DonorDirectoryScreen(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            // Division Dropdown
                             ExposedDropdownMenuBox(
                                 expanded = divisionExpanded,
                                 onExpandedChange = { divisionExpanded = !divisionExpanded },
@@ -327,7 +358,6 @@ fun DonorDirectoryScreen(
                                 }
                             }
 
-                            // District Dropdown
                             ExposedDropdownMenuBox(
                                 expanded = districtExpanded,
                                 onExpandedChange = { districtExpanded = !districtExpanded },
@@ -414,7 +444,6 @@ fun DonorDirectoryScreen(
                 }
             }
 
-            // Clinical Crossmatching Disclaimer Banner
             item {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -477,11 +506,11 @@ fun DonorDirectoryScreen(
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
                             Text(
-                                text = "No matching donors found in the database",
+                                text = "কোনো মিলে যাওয়া রক্তদাতা পাওয়া যায়নি",
                                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                             )
                             Text(
-                                text = "Try clearing location or blood group filters, or enable compatible RBC donor groups.",
+                                text = "ফিল্টার পরিবর্তন করুন বা বিকল্প সামঞ্জস্যপূর্ণ রক্তের গ্রুপ চালু করুন।",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.padding(top = 4.dp, bottom = 12.dp)
@@ -503,7 +532,8 @@ fun DonorDirectoryScreen(
                     }
                 }
             } else {
-                items(filteredDonors) { donor ->
+                items(filteredDonors, key = { it.uid }) { donor ->
+                    val isSelf = currentUserProfile?.uid == donor.uid
                     PublicDonorItemCard(
                         donor = donor,
                         recipientBloodGroup = bloodState.selectedBloodGroupFilter,
@@ -526,8 +556,37 @@ fun DonorDirectoryScreen(
                             } else {
                                 showAuthPromptDialog = true
                             }
-                        }
+                        },
+                        onReportClick = if (!isSelf) {
+                            {
+                                if (currentUserProfile != null) {
+                                    donorToReport = donor
+                                } else {
+                                    showAuthPromptDialog = true
+                                }
+                            }
+                        } else null
                     )
+                }
+
+                if (bloodState.hasMoreDonors) {
+                    item {
+                        OutlinedButton(
+                            onClick = { bloodViewModel.loadMoreDonors() },
+                            enabled = !bloodState.isLoadingMoreDonors,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 8.dp)
+                                .testTag("btn_load_more_donors"),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            if (bloodState.isLoadingMoreDonors) {
+                                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                                Spacer(modifier = Modifier.width(8.dp))
+                            }
+                            Text("আরও রক্তদাতা দেখুন (Load More)", fontWeight = FontWeight.Bold)
+                        }
+                    }
                 }
             }
 

@@ -1,52 +1,46 @@
 # রক্তসেতু (RoktoSetu) — Blood Donation & Emergency Assistance Platform
 
 **Application ID:** `com.aistudio.roktosetu.app`  
-**Stack:** Kotlin 2.2.10 • Jetpack Compose (Material 3) • Firebase (Auth, Custom Firestore Database, Storage, Cloud Functions v2, FCM, App Check) • Room Offline Cache
+**Stack:** Kotlin 2.2.10 • AGP 9.1.1 • KSP 2.3.5 • Jetpack Compose (Material 3) • Firebase (Auth, Custom Firestore Database, Storage, Cloud Functions v2 on Node 20, FCM, App Check) • Room Offline Cache
 
 ---
 
-## 1. Prerequisites & Secrets Configuration
+## 1. Prerequisites & Configuration
 
 - **JDK:** Java 17+
 - **Gradle:** 9.3.1
-- **Android SDK:** `compileSdk = 36`, `minSdk = 24`
-- **Firebase Configuration:** Valid `app/google-services.json` and `app/src/main/res/values/firebase_applet_config.xml`
-- **Secrets Panel / `.env` Configuration:**
-  Copy `.env.example` or configure the following variables in the **AI Studio Secrets panel**:
-  - `GOOGLE_WEB_CLIENT_ID`: Web OAuth 2.0 Client ID from Firebase Console (Authentication → Sign-in method → Google) for Credential Manager Google Sign-In.
-  - `PLAY_INTEGRITY_CLOUD_PROJECT_NUMBER`: Optional GCP project number override for Firebase App Check Play Integrity.
+- **Android SDK:** `compileSdk = 36`, `targetSdk = 36`, `minSdk = 24`
+- **Firebase Configuration:** Valid `app/google-services.json` and `app/src/main/res/values/firebase_applet_config.xml` (`ai-studio-android-lifelink-32b78329-0908-44db-bbd3-9204072ef691`)
+- **Release Signing (`keystore.properties`):**
+  For production release builds outside AI Studio, copy `keystore.properties.example` to `keystore.properties` (git-ignored) and set `storeFile`, `storePassword`, `keyAlias`, and `keyPassword`.
 
 ---
 
-## 2. Architecture & Security Highlights (Phases 1–6)
+## 2. Architecture & Security Highlights
 
 1. **Zero-Trust Security Rules (`firestore.rules` & `storage.rules`):**
-   - Custom Firestore Database (`ai-studio-android-lifelink-32b78329-0908-44db-bbd3-9204072ef691`) with strict schema, type, length, and ownership validation.
-   - Zero client-side `SUPER_ADMIN` auto-elevation; admin privileges require server-side custom claims (`request.auth.token.admin == true`) or `/admins/{uid}`.
-   - Private `/users/{uid}` profiles (PII such as phone, email, exact coordinates, and `fcmToken`) are strictly isolated from sanitized `/public_donors/{uid}` documents.
-   - Immutable `/audit_logs/{logId}` collection (`allow update, delete: if false;`) and `/system_config/emergency_broadcast` configuration toggle.
+   - Custom Firestore Database (`ai-studio-android-lifelink-32b78329-0908-44db-bbd3-9204072ef691`) with strict default-deny, field-level `affectedKeys()`, schema, type, length, and ownership validation.
+   - Server-verified `SUPER_ADMIN` authorization via Firebase Auth Custom Claim (`request.auth.token.admin == true`) or `/admins/{uid}` document. Super Admin role (`SUPER_ADMIN`) is strictly separated from donor verification status (`VerificationStatus.VERIFIED`).
+   - Private `/users/{uid}` profiles (PII such as phone, email, DOB, and `fcmToken`) are isolated from sanitized `/public_donors/{uid}` documents.
+   - Immutable `/audit_logs/{logId}` (`allow update, delete: if false;`), `/reports/{reportId}`, `/announcements/{announcementId}`, `/security_alerts/{alertId}`, and `/system_config/{configId}`.
    - Firebase Storage rules (`storage.rules`) restrict `/verification_docs/{userId}/{fileName}` to the authenticated owner (`<= 10 MB`, `image/*` or `application/pdf`).
 
-2. **Authentication & Session Integrity:**
-   - Email/Password and Google Sign-In via Jetpack Credential Manager (`FirebaseAuthService.kt`).
-   - Mandatory email verification gate for password-based accounts before accessing dashboard routes.
-   - Re-authentication prompt before account deletion and neutral password-reset confirmation messaging.
+2. **Super Admin Control Center (`AdminDashboardScreen.kt` & `AdminControlModules.kt`):**
+   - Complete Bengali control center covering 9 operational modules: Overview & Live Telemetry, Users & Donors Management (including Account Suspension/Reactivation), Donor & Donation Verification, Blood Requests Management, Emergency Broadcasts (with 15-minute duplicate guard), Organization Verification, Notifications & Announcements (with safe Preview mode), Complaints & Abuse Reports, System Settings & Health/Export, and Immutable Audit Logs.
 
-3. **Real-Time Blood Request State Machine, Offline Room Sync & Donor Card Export:**
-   - Blood request lifecycle (`PENDING` → `ACCEPTED` → `FULFILLED` / `CANCELLED`) with `acceptedDonorUid` and `expiresAt`.
-   - Offline-first Room cache (`RoktoSetuDatabase` v2) for sanitized public donors, blood requests, organizations, and chat messages.
-   - Real PNG Donor Card export (`DonorCardExporter.kt`) rendered via `Bitmap` + `Canvas` to `Pictures/RoktoSetu` using Android `MediaStore`.
+3. **Security & Privacy Center (`SecurityCenterScreen.kt`):**
+   - 8 structured Bengali sections replacing raw code dumps with human-readable database protection cards, account & session security verification, privacy policy breakdown, app permissions, security alerts review, activity history, and Super-Admin-only technical diagnostics.
 
-4. **Cloud Functions (`functions/index.js`) & FCM (`RoktoSetuMessagingService.kt`):**
-   - `sendEmergencyBroadcast`: Triggered when a `CRITICAL` blood request is created; respects `/system_config/emergency_broadcast`, filters compatible donors (`BloodCompatibilityHelper` matrix + 90-day cooldown), and dispatches FCM multicast notifications.
-   - `onVerificationStatusUpdated`: Synchronizes admin review decisions (`APPROVED`/`REJECTED`) across `/users/{uid}`, `/public_donors/{uid}`, and `/organizations/{orgId}`, and notifies the user via FCM.
+4. **Cloud Functions (`functions/index.js`, Node 20) & FCM (`RoktoSetuMessagingService.kt`):**
+   - `sendEmergencyBroadcast`: Triggered when a critical blood request is created; checks `/system_config/emergency_broadcast`, filters compatible donors (`BloodCompatibilityHelper` matrix + 90-day cooldown), and dispatches FCM notifications.
+   - `onVerificationStatusUpdated`: Synchronizes admin review decisions across `/users/{uid}`, `/public_donors/{uid}`, and `/organizations/{orgId}`.
    - `expireStaleBloodRequests`: Scheduled job that marks expired `PENDING` blood requests as `CANCELLED`.
 
 ---
 
 ## 3. Server-Side Admin Bootstrap (`tools/set-admin-claim.js`)
 
-To grant or revoke `SUPER_ADMIN` privileges without any client-side backdoor:
+To grant or revoke `SUPER_ADMIN` privileges (without altering donor verification status):
 
 ```bash
 GOOGLE_APPLICATION_CREDENTIALS=/path/to/serviceAccountKey.json \
@@ -68,14 +62,19 @@ node tools/set-admin-claim.js --uid <USER_FIREBASE_UID> --revoke
 # Deploy Firestore Rules, Indexes, and Storage Rules
 firebase deploy --only firestore:rules,firestore:indexes,storage
 
-# Install & Deploy Cloud Functions
+# Install & Deploy Cloud Functions (Node 20)
 npm --prefix functions install
 firebase deploy --only functions
 ```
 
 ---
 
-## 5. Build & Automated Verification Commands
+## 5. Build & Verification Commands
+
+### Generate Local Gradle Wrapper (when building outside AI Studio)
+```bash
+gradle wrapper --gradle-version 9.3.1
+```
 
 ### Debug & Release Builds
 ```bash
@@ -83,12 +82,7 @@ gradle :app:assembleDebug
 gradle :app:assembleRelease
 ```
 
-### Firestore Security Rules Tests (Local Emulator)
-```bash
-firebase emulators:exec --only firestore "node --test firestore.test.js"
-```
-
 ### Android Unit & Robolectric Tests
 ```bash
-firebase emulators:exec --only firestore,auth "gradle :app:testDebugUnitTest"
+gradle :app:testDebugUnitTest
 ```

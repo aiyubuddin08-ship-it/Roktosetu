@@ -84,22 +84,23 @@ exports.sendEmergencyBroadcast = onCall(
     }
 
     const reqData = reqSnap.data();
+    const requesterUid = reqData.requesterUid || reqData.requesterId || "";
     const isSuperAdmin = await isCallerSuperAdmin(request.auth);
-    if (reqData.requesterUid !== request.auth.uid && !isSuperAdmin) {
+    if (requesterUid !== request.auth.uid && !isSuperAdmin) {
       throw new HttpsError(
         "permission-denied",
         "Only the request creator or an administrator can trigger an emergency broadcast."
       );
     }
 
-    if (reqData.status !== "PENDING") {
+    if (!["PENDING", "OPEN"].includes(reqData.status)) {
       throw new HttpsError(
         "failed-precondition",
-        "Broadcasts can only be sent for PENDING blood requests."
+        "Broadcasts can only be sent for PENDING or OPEN blood requests."
       );
     }
 
-    const sysConfigSnap = await db.collection("system_config").doc("emergency_broadcast").get();
+    const sysConfigSnap = await db.collection("system_settings").doc("emergency_broadcast").get();
     if (sysConfigSnap.exists && sysConfigSnap.data().armed === false) {
       throw new HttpsError(
         "failed-precondition",
@@ -139,7 +140,7 @@ exports.sendEmergencyBroadcast = onCall(
     const matchedDonorUids = [];
 
     donorsSnapshot.forEach((doc) => {
-      if (doc.id === reqData.requesterUid) return;
+      if (doc.id === requesterUid) return;
       const d = doc.data();
       const donorDistrict = sanitizeString(d.district || (d.location && d.location.district) || d.city, 60);
       const donorDivision = sanitizeString(d.division || (d.location && d.location.division), 60);
@@ -159,12 +160,13 @@ exports.sendEmergencyBroadcast = onCall(
       }
     });
 
+    const unitsNeeded = reqData.unitsRequired || reqData.bagsNeeded || 1;
     let successCount = 0;
     if (tokens.length > 0) {
       const message = {
         notification: {
           title: `Urgent ${recipientBloodGroup.replace("_", " ")} Blood Needed`,
-          body: `Patient at ${sanitizeString(reqData.hospitalName, 80)} (${targetDistrict || "Bangladesh"}) needs ${reqData.unitsRequired || 1} bag(s).`
+          body: `Patient at ${sanitizeString(reqData.hospitalName, 80)} (${targetDistrict || "Bangladesh"}) needs ${unitsNeeded} bag(s).`
         },
         data: {
           requestId,
@@ -234,18 +236,19 @@ exports.acceptBloodRequest = onCall(
 
       const reqData = reqDoc.data();
       const donorData = donorDoc.data();
+      const requesterUid = reqData.requesterUid || reqData.requesterId || "";
 
-      if (reqData.requesterUid === donorUid) {
+      if (requesterUid === donorUid) {
         throw new HttpsError("failed-precondition", "You cannot accept your own blood request.");
       }
 
-      if (reqData.status !== "PENDING") {
+      if (!["PENDING", "OPEN", "DONOR_RESPONDED"].includes(reqData.status)) {
         if (reqData.acceptedDonorUid === donorUid) {
           return { alreadyAccepted: true, status: reqData.status };
         }
         throw new HttpsError(
           "aborted",
-          `This blood request is no longer pending (current status: ${reqData.status}).`
+          `This blood request is no longer open/pending (current status: ${reqData.status}).`
         );
       }
 
@@ -264,33 +267,40 @@ exports.acceptBloodRequest = onCall(
       const updatedResponders = existingResponders.includes(donorUid)
         ? existingResponders
         : [...existingResponders, donorUid].slice(0, 20);
+      const unitsRequired = Number(reqData.unitsRequired || reqData.bagsNeeded || 1);
+      const currentFulfilled = Number(reqData.unitsFulfilled || reqData.bagsPledged || 0);
+      const newFulfilled = Math.min(currentFulfilled + 1, unitsRequired);
+      const newStatus = newFulfilled >= unitsRequired ? "ACCEPTED" : "DONOR_RESPONDED";
 
       tx.update(reqRef, {
-        status: "ACCEPTED",
+        status: newStatus,
         acceptedDonorUid: donorUid,
         acceptedDonorName: sanitizeString(donorData.name, 100) || "Voluntary Donor",
         respondedDonorUids: updatedResponders,
+        unitsFulfilled: newFulfilled,
         updatedAt: now
       });
 
-      const notifRef = db
-        .collection("users")
-        .doc(reqData.requesterUid)
-        .collection("notifications")
-        .doc(`accept_${requestId}_${donorUid}`);
+      if (requesterUid) {
+        const notifRef = db
+          .collection("users")
+          .doc(requesterUid)
+          .collection("notifications")
+          .doc(`accept_${requestId}_${donorUid}`);
 
-      tx.set(notifRef, {
-        id: notifRef.id,
-        recipientUid: reqData.requesterUid,
-        title: "Donor Responded to Your Request",
-        body: `${sanitizeString(donorData.name, 80)} (${donorData.bloodGroup}) has committed to donate for ${sanitizeString(reqData.patientName, 80)}.`,
-        type: "REQUEST_ACCEPTED",
-        referenceId: requestId,
-        isRead: false,
-        createdAt: now
-      });
+        tx.set(notifRef, {
+          id: notifRef.id,
+          recipientUid: requesterUid,
+          title: "Donor Responded to Your Request",
+          body: `${sanitizeString(donorData.name, 80)} (${donorData.bloodGroup}) has committed to donate for ${sanitizeString(reqData.patientName, 80)}.`,
+          type: "REQUEST_ACCEPTED",
+          referenceId: requestId,
+          isRead: false,
+          createdAt: now
+        });
+      }
 
-      return { alreadyAccepted: false, status: "ACCEPTED" };
+      return { alreadyAccepted: false, status: newStatus };
     });
 
     return { success: true, ...result };
@@ -335,7 +345,7 @@ exports.verifyDonation = onCall(
       ? `don_${requestId}_${donorUid}`
       : `don_${donorUid}_${Math.floor(Date.now() / 86400000)}`;
 
-    const donationRef = db.collection("donations").doc(deterministicKey);
+    const donationRef = db.collection("donation_history").doc(deterministicKey);
     const userRef = db.collection("users").doc(donorUid);
     const publicDonorRef = db.collection("public_donors").doc(donorUid);
 
@@ -387,16 +397,23 @@ exports.verifyDonation = onCall(
       const certificateCode = `RS-${now.toString(36).toUpperCase()}-${donorUid.slice(0, 5).toUpperCase()}`;
 
       tx.set(donationRef, {
+        id: donationRef.id,
+        donorId: donorUid,
         donorUid,
         donorName: sanitizeString(userData.name, 100) || "Donor",
         bloodGroup: userData.bloodGroup || "O_POSITIVE",
         requestId: requestId || null,
         hospitalName,
         city,
+        district: city,
         donationDate: now,
+        verifiedByRequester: true,
         verifiedByOrgId: orgId || "SYSTEM_ADMIN",
         verifiedByOrgName: orgName,
+        verificationStatus: "VERIFIED",
+        bags: unitsDonated,
         unitsDonated,
+        certificateId: certificateCode,
         certificateCode
       });
 
@@ -480,6 +497,7 @@ exports.reviewVerificationRequest = onCall(
         return; // Idempotent no-op if already processed
       }
 
+      const applicantUid = taskData.applicantUid || taskData.userUid || "";
       const now = Date.now();
       tx.update(taskRef, {
         status: decision,
@@ -488,15 +506,15 @@ exports.reviewVerificationRequest = onCall(
       });
 
       if (taskData.type === "ORGANIZATION") {
-        const orgRef = db.collection("organizations").doc(taskData.applicantUid);
+        const orgRef = db.collection("organizations").doc(applicantUid);
         const orgSnap = await tx.get(orgRef);
         if (orgSnap.exists) {
           tx.update(orgRef, { isVerified: decision === "APPROVED" });
         }
       } else {
         const newStatus = decision === "APPROVED" ? "VERIFIED" : "REJECTED";
-        const userRef = db.collection("users").doc(taskData.applicantUid);
-        const pubRef = db.collection("public_donors").doc(taskData.applicantUid);
+        const userRef = db.collection("users").doc(applicantUid);
+        const pubRef = db.collection("public_donors").doc(applicantUid);
         const [uSnap, pSnap] = await Promise.all([tx.get(userRef), tx.get(pubRef)]);
         if (uSnap.exists) {
           tx.update(userRef, { verificationStatus: newStatus, updatedAt: now });
@@ -511,7 +529,7 @@ exports.reviewVerificationRequest = onCall(
         actorUid: request.auth.uid,
         actorEmail: request.auth.token.email || "admin",
         action: `VERIFICATION_${decision}`,
-        targetId: taskData.applicantUid,
+        targetId: applicantUid,
         targetType: taskData.type,
         details: `${decision} verification task ${taskId} for ${sanitizeString(taskData.name, 80)}`,
         timestamp: now
@@ -524,13 +542,13 @@ exports.reviewVerificationRequest = onCall(
 
 /**
  * 5. Scheduled Expiration of Stale Blood Requests
- * Automatically marks PENDING blood requests as EXPIRED once their expiresAt timestamp passes.
+ * Automatically marks PENDING or OPEN blood requests as EXPIRED once their expiresAt timestamp passes.
  */
 exports.expireStaleBloodRequests = onSchedule("every 60 minutes", async () => {
   const now = Date.now();
   const staleRequestsSnap = await db
     .collection("blood_requests")
-    .where("status", "==", "PENDING")
+    .where("status", "in", ["PENDING", "OPEN"])
     .where("expiresAt", "<=", now)
     .limit(200)
     .get();

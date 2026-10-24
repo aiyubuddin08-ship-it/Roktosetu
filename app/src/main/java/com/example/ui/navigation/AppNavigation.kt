@@ -1,12 +1,17 @@
 package com.example.ui.navigation
 
+import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AddCircle
 import androidx.compose.material.icons.filled.Emergency
@@ -14,6 +19,7 @@ import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material.icons.outlined.AddCircleOutline
 import androidx.compose.material.icons.outlined.Emergency
 import androidx.compose.material.icons.outlined.Home
@@ -25,8 +31,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -50,21 +58,23 @@ import com.example.ui.screens.auth.ForgotPasswordScreen
 import com.example.ui.screens.auth.LoginScreen
 import com.example.ui.screens.auth.ProfileCompletionScreen
 import com.example.ui.screens.auth.RegisterScreen
+import com.example.ui.screens.bloodbanks.BloodBankScreen
+import com.example.ui.screens.camps.BloodCampScreen
 import com.example.ui.screens.chat.ChatConversationScreen
 import com.example.ui.screens.chat.ChatListScreen
+import com.example.ui.screens.donorcard.DonorCardScreen
 import com.example.ui.screens.donors.DonorDirectoryScreen
 import com.example.ui.screens.emergency.EmergencyScreen
 import com.example.ui.screens.home.HomeScreen
+import com.example.ui.screens.offline.OfflineSmsScreen
 import com.example.ui.screens.organizations.OrganizationsScreen
 import com.example.ui.screens.profile.DonationHistoryScreen
 import com.example.ui.screens.profile.MyProfileScreen
 import com.example.ui.screens.requests.CreateRequestScreen
 import com.example.ui.screens.requests.RequestDetailScreen
 import com.example.ui.screens.security.SecurityCenterScreen
-import com.example.ui.screens.bloodbanks.BloodBankScreen
-import com.example.ui.screens.camps.BloodCampScreen
-import com.example.ui.screens.donorcard.DonorCardScreen
-import com.example.ui.screens.offline.OfflineSmsScreen
+import com.example.ui.theme.EmergencyRed
+import com.example.ui.theme.EmergencyRedContainer
 import com.example.ui.viewmodel.AdminViewModel
 import com.example.ui.viewmodel.AuthViewModel
 import com.example.ui.viewmodel.BloodViewModel
@@ -101,9 +111,13 @@ fun AppNavigation(
     chatViewModel: ChatViewModel,
     orgViewModel: OrganizationViewModel,
     adminViewModel: AdminViewModel,
-    extraViewModel: ExtraFeaturesViewModel
+    extraViewModel: ExtraFeaturesViewModel,
+    deepLinkRoute: String? = null,
+    deepLinkTargetId: String? = null,
+    onDeepLinkConsumed: () -> Unit = {}
 ) {
     val authState by authViewModel.authState.collectAsState()
+    val bloodState by bloodViewModel.uiState.collectAsState()
 
     if (authState is AuthState.Loading) {
         Box(
@@ -127,7 +141,7 @@ fun AppNavigation(
     if (authState is AuthState.EmailVerificationRequired) {
         EmailVerificationScreen(
             authViewModel = authViewModel,
-            onVerifiedSuccess = { /* Automatically handled by auth state */ },
+            onVerifiedSuccess = { },
             onSignOut = { authViewModel.signOut() }
         )
         return
@@ -136,7 +150,7 @@ fun AppNavigation(
     if (authState is AuthState.ProfileCompletionRequired) {
         ProfileCompletionScreen(
             authViewModel = authViewModel,
-            onCompletionSuccess = { /* Automatically handled by auth state */ }
+            onCompletionSuccess = { }
         )
         return
     }
@@ -149,10 +163,42 @@ fun AppNavigation(
         return
     }
 
+    // Handle FCM notification deep links
+    LaunchedEffect(deepLinkRoute, deepLinkTargetId) {
+        if (!deepLinkRoute.isNullOrBlank()) {
+            when (deepLinkRoute) {
+                "request_details" -> {
+                    if (!deepLinkTargetId.isNullOrBlank()) {
+                        navController.navigate(Screen.RequestDetails.createRoute(deepLinkTargetId)) {
+                            launchSingleTop = true
+                        }
+                    }
+                }
+                "chat_list" -> {
+                    navController.navigate(Screen.ChatList.route) {
+                        launchSingleTop = true
+                    }
+                }
+            }
+            onDeepLinkConsumed()
+        }
+    }
+
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route
 
     val showBottomBar = bottomNavItems.any { it.route == currentRoute }
+
+    // Logical back navigation on bottom tabs -> return to Home
+    BackHandler(enabled = showBottomBar && currentRoute != Screen.Home.route) {
+        navController.navigate(Screen.Home.route) {
+            popUpTo(navController.graph.findStartDestination().id) {
+                saveState = true
+            }
+            launchSingleTop = true
+            restoreState = true
+        }
+    }
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
@@ -193,258 +239,295 @@ fun AppNavigation(
             }
         }
     ) { innerPadding ->
-        NavHost(
-            navController = navController,
-            startDestination = Screen.Home.route,
-            modifier = Modifier.padding(innerPadding)
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
         ) {
-            // Main Guest-accessible Tabs
-            composable(Screen.Home.route) {
-                HomeScreen(
-                    authViewModel = authViewModel,
-                    bloodViewModel = bloodViewModel,
-                    extraViewModel = extraViewModel,
-                    onNavigateToCreateRequest = { navController.navigate(Screen.CreateRequest.route) },
-                    onNavigateToEmergency = { navController.navigate(Screen.EmergencySearch.route) },
-                    onNavigateToDonors = { navController.navigate(Screen.DonorDirectory.route) },
-                    onNavigateToOrganizations = { navController.navigate(Screen.Organizations.route) },
-                    onNavigateToDonationHistory = { navController.navigate(Screen.DonationHistory.route) },
-                    onNavigateToRequestDetails = { reqId ->
-                        navController.navigate(Screen.RequestDetails.createRoute(reqId))
-                    },
-                    onNavigateToAdmin = { navController.navigate(Screen.AdminDashboard.route) },
-                    onNavigateToSecurity = { navController.navigate(Screen.SecurityCenter.route) },
-                    onNavigateToChat = { navController.navigate(Screen.ChatList.route) },
-                    onNavigateToBloodBanks = { navController.navigate(Screen.BloodBanks.route) },
-                    onNavigateToCamps = { navController.navigate(Screen.BloodCamps.route) },
-                    onNavigateToDonorCard = { navController.navigate(Screen.DonorCard.route) },
-                    onNavigateToOfflineSms = { navController.navigate(Screen.OfflineSms.route) },
-                    onNavigateToLogin = { navController.navigate(Screen.AuthLogin.route) },
-                    onNavigateToRegister = { navController.navigate(Screen.AuthRegister.route) }
-                )
-            }
-
-            composable(Screen.EmergencySearch.route) {
-                EmergencyScreen(
-                    authViewModel = authViewModel,
-                    bloodViewModel = bloodViewModel,
-                    chatViewModel = chatViewModel,
-                    onNavigateBack = { navController.popBackStack() },
-                    onNavigateToChatConversation = { convId, name, blood ->
-                        navController.navigate(Screen.ChatConversation.createRoute(convId, name, blood))
-                    },
-                    onNavigateToCreateRequest = { navController.navigate(Screen.CreateRequest.route) },
-                    onNavigateToLogin = { navController.navigate(Screen.AuthLogin.route) },
-                    onNavigateToRegister = { navController.navigate(Screen.AuthRegister.route) }
-                )
-            }
-
-            composable(Screen.CreateRequest.route) {
-                CreateRequestScreen(
-                    authViewModel = authViewModel,
-                    bloodViewModel = bloodViewModel,
-                    onNavigateBack = { navController.popBackStack() },
-                    onRequestCreated = { reqId ->
-                        navController.navigate(Screen.RequestDetails.createRoute(reqId)) {
-                            popUpTo(Screen.CreateRequest.route) { inclusive = true }
-                        }
-                    },
-                    onNavigateToLogin = { navController.navigate(Screen.AuthLogin.route) },
-                    onNavigateToRegister = { navController.navigate(Screen.AuthRegister.route) }
-                )
-            }
-
-            composable(Screen.DonorDirectory.route) {
-                DonorDirectoryScreen(
-                    authViewModel = authViewModel,
-                    bloodViewModel = bloodViewModel,
-                    chatViewModel = chatViewModel,
-                    onNavigateToChatConversation = { convId, name, blood ->
-                        navController.navigate(Screen.ChatConversation.createRoute(convId, name, blood))
-                    },
-                    onNavigateToSecurity = { navController.navigate(Screen.SecurityCenter.route) },
-                    onNavigateToChat = { navController.navigate(Screen.ChatList.route) },
-                    onNavigateToLogin = { navController.navigate(Screen.AuthLogin.route) },
-                    onNavigateToRegister = { navController.navigate(Screen.AuthRegister.route) }
-                )
-            }
-
-            composable(Screen.MyProfile.route) {
-                MyProfileScreen(
-                    authViewModel = authViewModel,
-                    onNavigateToLogin = { navController.navigate(Screen.AuthLogin.route) },
-                    onNavigateToRegister = { navController.navigate(Screen.AuthRegister.route) },
-                    onNavigateToHistory = { navController.navigate(Screen.DonationHistory.route) },
-                    onNavigateToSecurity = { navController.navigate(Screen.SecurityCenter.route) },
-                    onSignedOut = {
-                        authViewModel.signOut()
+            // Phase 8: Offline Banner
+            AnimatedVisibility(visible = bloodState.isOffline) {
+                Surface(
+                    color = EmergencyRedContainer,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("offline_network_banner")
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.WifiOff,
+                            contentDescription = "অফলাইন",
+                            tint = EmergencyRed,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "ইন্টারনেট নেই — সংরক্ষিত তথ্য দেখানো হচ্ছে",
+                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                            color = EmergencyRed
+                        )
                     }
-                )
+                }
             }
 
-            // Authentication Screens (accessible directly on action or from profile/topbar)
-            composable(Screen.AuthLogin.route) {
-                LoginScreen(
-                    authViewModel = authViewModel,
-                    onNavigateToRegister = { navController.navigate(Screen.AuthRegister.route) },
-                    onNavigateToForgotPassword = { navController.navigate(Screen.AuthForgotPassword.route) },
-                    onNavigateBack = {
-                        if (!navController.popBackStack()) {
-                            navController.navigate(Screen.Home.route)
+            NavHost(
+                navController = navController,
+                startDestination = Screen.Home.route,
+                modifier = Modifier.weight(1f)
+            ) {
+                composable(Screen.Home.route) {
+                    HomeScreen(
+                        authViewModel = authViewModel,
+                        bloodViewModel = bloodViewModel,
+                        extraViewModel = extraViewModel,
+                        onNavigateToCreateRequest = { navController.navigate(Screen.CreateRequest.route) },
+                        onNavigateToEmergency = { navController.navigate(Screen.EmergencySearch.route) },
+                        onNavigateToDonors = { navController.navigate(Screen.DonorDirectory.route) },
+                        onNavigateToOrganizations = { navController.navigate(Screen.Organizations.route) },
+                        onNavigateToDonationHistory = { navController.navigate(Screen.DonationHistory.route) },
+                        onNavigateToRequestDetails = { reqId ->
+                            navController.navigate(Screen.RequestDetails.createRoute(reqId))
+                        },
+                        onNavigateToAdmin = { navController.navigate(Screen.AdminDashboard.route) },
+                        onNavigateToSecurity = { navController.navigate(Screen.SecurityCenter.route) },
+                        onNavigateToChat = { navController.navigate(Screen.ChatList.route) },
+                        onNavigateToBloodBanks = { navController.navigate(Screen.BloodBanks.route) },
+                        onNavigateToCamps = { navController.navigate(Screen.BloodCamps.route) },
+                        onNavigateToDonorCard = { navController.navigate(Screen.DonorCard.route) },
+                        onNavigateToOfflineSms = { navController.navigate(Screen.OfflineSms.route) },
+                        onNavigateToLogin = { navController.navigate(Screen.AuthLogin.route) },
+                        onNavigateToRegister = { navController.navigate(Screen.AuthRegister.route) }
+                    )
+                }
+
+                composable(Screen.EmergencySearch.route) {
+                    EmergencyScreen(
+                        authViewModel = authViewModel,
+                        bloodViewModel = bloodViewModel,
+                        chatViewModel = chatViewModel,
+                        onNavigateBack = { navController.popBackStack() },
+                        onNavigateToChatConversation = { convId, name, blood ->
+                            navController.navigate(Screen.ChatConversation.createRoute(convId, name, blood))
+                        },
+                        onNavigateToCreateRequest = { navController.navigate(Screen.CreateRequest.route) },
+                        onNavigateToLogin = { navController.navigate(Screen.AuthLogin.route) },
+                        onNavigateToRegister = { navController.navigate(Screen.AuthRegister.route) }
+                    )
+                }
+
+                composable(Screen.CreateRequest.route) {
+                    CreateRequestScreen(
+                        authViewModel = authViewModel,
+                        bloodViewModel = bloodViewModel,
+                        onNavigateBack = { navController.popBackStack() },
+                        onRequestCreated = { reqId ->
+                            navController.navigate(Screen.RequestDetails.createRoute(reqId)) {
+                                popUpTo(Screen.CreateRequest.route) { inclusive = true }
+                            }
+                        },
+                        onNavigateToLogin = { navController.navigate(Screen.AuthLogin.route) },
+                        onNavigateToRegister = { navController.navigate(Screen.AuthRegister.route) }
+                    )
+                }
+
+                composable(Screen.DonorDirectory.route) {
+                    DonorDirectoryScreen(
+                        authViewModel = authViewModel,
+                        bloodViewModel = bloodViewModel,
+                        chatViewModel = chatViewModel,
+                        onNavigateToChatConversation = { convId, name, blood ->
+                            navController.navigate(Screen.ChatConversation.createRoute(convId, name, blood))
+                        },
+                        onNavigateToSecurity = { navController.navigate(Screen.SecurityCenter.route) },
+                        onNavigateToChat = { navController.navigate(Screen.ChatList.route) },
+                        onNavigateToLogin = { navController.navigate(Screen.AuthLogin.route) },
+                        onNavigateToRegister = { navController.navigate(Screen.AuthRegister.route) }
+                    )
+                }
+
+                composable(Screen.MyProfile.route) {
+                    MyProfileScreen(
+                        authViewModel = authViewModel,
+                        onNavigateToLogin = { navController.navigate(Screen.AuthLogin.route) },
+                        onNavigateToRegister = { navController.navigate(Screen.AuthRegister.route) },
+                        onNavigateToHistory = { navController.navigate(Screen.DonationHistory.route) },
+                        onNavigateToSecurity = { navController.navigate(Screen.SecurityCenter.route) },
+                        onSignedOut = {
+                            authViewModel.signOut()
                         }
-                    },
-                    onLoginSuccess = {
-                        navController.navigate(Screen.Home.route) {
-                            popUpTo(0) { inclusive = true }
+                    )
+                }
+
+                composable(Screen.AuthLogin.route) {
+                    LoginScreen(
+                        authViewModel = authViewModel,
+                        onNavigateToRegister = { navController.navigate(Screen.AuthRegister.route) },
+                        onNavigateToForgotPassword = { navController.navigate(Screen.AuthForgotPassword.route) },
+                        onNavigateBack = {
+                            if (!navController.popBackStack()) {
+                                navController.navigate(Screen.Home.route)
+                            }
+                        },
+                        onLoginSuccess = {
+                            navController.navigate(Screen.Home.route) {
+                                popUpTo(0) { inclusive = true }
+                            }
+                        },
+                        onAdminLoginSuccess = {
+                            navController.navigate(Screen.AdminDashboard.route) {
+                                popUpTo(0) { inclusive = true }
+                            }
                         }
-                    },
-                    onAdminLoginSuccess = {
-                        navController.navigate(Screen.AdminDashboard.route) {
-                            popUpTo(0) { inclusive = true }
+                    )
+                }
+
+                composable(Screen.AuthRegister.route) {
+                    RegisterScreen(
+                        authViewModel = authViewModel,
+                        onNavigateToLogin = {
+                            if (!navController.popBackStack()) {
+                                navController.navigate(Screen.AuthLogin.route)
+                            }
+                        },
+                        onNavigateBack = {
+                            if (!navController.popBackStack()) {
+                                navController.navigate(Screen.Home.route)
+                            }
+                        },
+                        onRegisterSuccess = {
+                            navController.navigate(Screen.Home.route) {
+                                popUpTo(0) { inclusive = true }
+                            }
                         }
-                    }
-                )
-            }
+                    )
+                }
 
-            composable(Screen.AuthRegister.route) {
-                RegisterScreen(
-                    authViewModel = authViewModel,
-                    onNavigateToLogin = {
-                        if (!navController.popBackStack()) {
-                            navController.navigate(Screen.AuthLogin.route)
+                composable(Screen.AuthForgotPassword.route) {
+                    ForgotPasswordScreen(
+                        authViewModel = authViewModel,
+                        onNavigateBack = { navController.popBackStack() }
+                    )
+                }
+
+                composable(
+                    route = Screen.RequestDetails.route,
+                    arguments = listOf(navArgument("requestId") { type = NavType.StringType })
+                ) { backStackEntry ->
+                    val reqId = backStackEntry.arguments?.getString("requestId") ?: ""
+                    RequestDetailScreen(
+                        requestId = reqId,
+                        authViewModel = authViewModel,
+                        bloodViewModel = bloodViewModel,
+                        chatViewModel = chatViewModel,
+                        onNavigateBack = { navController.popBackStack() },
+                        onNavigateToChatConversation = { convId, name, blood ->
+                            navController.navigate(Screen.ChatConversation.createRoute(convId, name, blood))
+                        },
+                        onNavigateToLogin = { navController.navigate(Screen.AuthLogin.route) },
+                        onNavigateToRegister = { navController.navigate(Screen.AuthRegister.route) }
+                    )
+                }
+
+                composable(Screen.DonationHistory.route) {
+                    DonationHistoryScreen(
+                        bloodViewModel = bloodViewModel,
+                        onNavigateBack = { navController.popBackStack() }
+                    )
+                }
+
+                composable(Screen.Organizations.route) {
+                    OrganizationsScreen(
+                        orgViewModel = orgViewModel,
+                        onNavigateBack = { navController.popBackStack() }
+                    )
+                }
+
+                composable(Screen.ChatList.route) {
+                    ChatListScreen(
+                        chatViewModel = chatViewModel,
+                        authViewModel = authViewModel,
+                        onNavigateBack = { navController.popBackStack() },
+                        onNavigateToConversation = { convId, name, blood ->
+                            navController.navigate(Screen.ChatConversation.createRoute(convId, name, blood))
                         }
-                    },
-                    onNavigateBack = {
-                        if (!navController.popBackStack()) {
-                            navController.navigate(Screen.Home.route)
-                        }
-                    },
-                    onRegisterSuccess = {
-                        navController.navigate(Screen.Home.route) {
-                            popUpTo(0) { inclusive = true }
-                        }
-                    }
-                )
-            }
+                    )
+                }
 
-            composable(Screen.AuthForgotPassword.route) {
-                ForgotPasswordScreen(
-                    authViewModel = authViewModel,
-                    onNavigateBack = { navController.popBackStack() }
-                )
-            }
+                composable(
+                    route = Screen.ChatConversation.route,
+                    arguments = listOf(
+                        navArgument("conversationId") { type = NavType.StringType },
+                        navArgument("otherName") { type = NavType.StringType },
+                        navArgument("otherBloodGroup") { type = NavType.StringType }
+                    )
+                ) { backStackEntry ->
+                    val convId = backStackEntry.arguments?.getString("conversationId") ?: ""
+                    val otherName = backStackEntry.arguments?.getString("otherName") ?: "User"
+                    val otherBlood = backStackEntry.arguments?.getString("otherBloodGroup") ?: ""
 
-            // Sub-destinations
-            composable(
-                route = Screen.RequestDetails.route,
-                arguments = listOf(navArgument("requestId") { type = NavType.StringType })
-            ) { backStackEntry ->
-                val reqId = backStackEntry.arguments?.getString("requestId") ?: ""
-                RequestDetailScreen(
-                    requestId = reqId,
-                    authViewModel = authViewModel,
-                    bloodViewModel = bloodViewModel,
-                    chatViewModel = chatViewModel,
-                    onNavigateBack = { navController.popBackStack() },
-                    onNavigateToChatConversation = { convId, name, blood ->
-                        navController.navigate(Screen.ChatConversation.createRoute(convId, name, blood))
-                    },
-                    onNavigateToLogin = { navController.navigate(Screen.AuthLogin.route) },
-                    onNavigateToRegister = { navController.navigate(Screen.AuthRegister.route) }
-                )
-            }
+                    ChatConversationScreen(
+                        conversationId = convId,
+                        otherName = otherName,
+                        otherBloodGroup = otherBlood,
+                        chatViewModel = chatViewModel,
+                        authViewModel = authViewModel,
+                        onNavigateBack = { navController.popBackStack() }
+                    )
+                }
 
-            composable(Screen.DonationHistory.route) {
-                DonationHistoryScreen(
-                    bloodViewModel = bloodViewModel,
-                    onNavigateBack = { navController.popBackStack() }
-                )
-            }
+                composable(Screen.AdminDashboard.route) {
+                    AdminDashboardScreen(
+                        adminViewModel = adminViewModel,
+                        onNavigateBack = { navController.popBackStack() },
+                        authViewModel = authViewModel,
+                        onNavigateToSecurity = { navController.navigate(Screen.SecurityCenter.route) }
+                    )
+                }
 
-            composable(Screen.Organizations.route) {
-                OrganizationsScreen(
-                    orgViewModel = orgViewModel,
-                    onNavigateBack = { navController.popBackStack() }
-                )
-            }
+                composable(Screen.SecurityCenter.route) {
+                    SecurityCenterScreen(
+                        onNavigateBack = { navController.popBackStack() },
+                        authViewModel = authViewModel,
+                        adminViewModel = adminViewModel,
+                        onNavigateToAdminDashboard = { navController.navigate(Screen.AdminDashboard.route) }
+                    )
+                }
 
-            composable(Screen.ChatList.route) {
-                ChatListScreen(
-                    chatViewModel = chatViewModel,
-                    authViewModel = authViewModel,
-                    onNavigateBack = { navController.popBackStack() },
-                    onNavigateToConversation = { convId, name, blood ->
-                        navController.navigate(Screen.ChatConversation.createRoute(convId, name, blood))
-                    }
-                )
-            }
+                composable(Screen.BloodBanks.route) {
+                    BloodBankScreen(
+                        extraViewModel = extraViewModel,
+                        onNavigateBack = { navController.popBackStack() }
+                    )
+                }
 
-            composable(
-                route = Screen.ChatConversation.route,
-                arguments = listOf(
-                    navArgument("conversationId") { type = NavType.StringType },
-                    navArgument("otherName") { type = NavType.StringType },
-                    navArgument("otherBloodGroup") { type = NavType.StringType }
-                )
-            ) { backStackEntry ->
-                val convId = backStackEntry.arguments?.getString("conversationId") ?: ""
-                val otherName = backStackEntry.arguments?.getString("otherName") ?: "User"
-                val otherBlood = backStackEntry.arguments?.getString("otherBloodGroup") ?: ""
+                composable(Screen.BloodCamps.route) {
+                    BloodCampScreen(
+                        extraViewModel = extraViewModel,
+                        authViewModel = authViewModel,
+                        onNavigateBack = { navController.popBackStack() },
+                        onNavigateToLogin = { navController.navigate(Screen.AuthLogin.route) },
+                        onNavigateToRegister = { navController.navigate(Screen.AuthRegister.route) }
+                    )
+                }
 
-                ChatConversationScreen(
-                    conversationId = convId,
-                    otherName = otherName,
-                    otherBloodGroup = otherBlood,
-                    chatViewModel = chatViewModel,
-                    authViewModel = authViewModel,
-                    onNavigateBack = { navController.popBackStack() }
-                )
-            }
+                composable(Screen.DonorCard.route) {
+                    DonorCardScreen(
+                        authViewModel = authViewModel,
+                        extraViewModel = extraViewModel,
+                        onNavigateBack = { navController.popBackStack() }
+                    )
+                }
 
-            composable(Screen.AdminDashboard.route) {
-                AdminDashboardScreen(
-                    adminViewModel = adminViewModel,
-                    onNavigateBack = { navController.popBackStack() },
-                    authViewModel = authViewModel
-                )
-            }
-
-            composable(Screen.SecurityCenter.route) {
-                SecurityCenterScreen(
-                    onNavigateBack = { navController.popBackStack() }
-                )
-            }
-
-            composable(Screen.BloodBanks.route) {
-                BloodBankScreen(
-                    extraViewModel = extraViewModel,
-                    onNavigateBack = { navController.popBackStack() }
-                )
-            }
-
-            composable(Screen.BloodCamps.route) {
-                BloodCampScreen(
-                    extraViewModel = extraViewModel,
-                    authViewModel = authViewModel,
-                    onNavigateBack = { navController.popBackStack() },
-                    onNavigateToLogin = { navController.navigate(Screen.AuthLogin.route) },
-                    onNavigateToRegister = { navController.navigate(Screen.AuthRegister.route) }
-                )
-            }
-
-            composable(Screen.DonorCard.route) {
-                DonorCardScreen(
-                    authViewModel = authViewModel,
-                    extraViewModel = extraViewModel,
-                    onNavigateBack = { navController.popBackStack() }
-                )
-            }
-
-            composable(Screen.OfflineSms.route) {
-                OfflineSmsScreen(
-                    extraViewModel = extraViewModel,
-                    onNavigateBack = { navController.popBackStack() }
-                )
+                composable(Screen.OfflineSms.route) {
+                    OfflineSmsScreen(
+                        extraViewModel = extraViewModel,
+                        onNavigateBack = { navController.popBackStack() }
+                    )
+                }
             }
         }
     }

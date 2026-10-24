@@ -2,14 +2,10 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Global Default-Deny Catch-All
-    match /{document=**} {
-      allow read, write: if false;
-    }
+    // =========================================================================
+    // Helper Functions: Authentication, RBAC & Common Enum / Type Validators
+    // =========================================================================
 
-    // =========================================================================
-    // Core Security Primitives
-    // =========================================================================
     function isSignedIn() {
       return request.auth != null;
     }
@@ -18,550 +14,562 @@ service cloud.firestore {
       return isSignedIn() && request.auth.uid == userId;
     }
 
-    function incoming() {
-      return request.resource.data;
-    }
-
-    function existing() {
-      return resource.data;
-    }
-
-    function isValidId(id) {
-      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
-    }
-
+    // Admin privilege check:
+    // Relies exclusively on Firebase Auth Custom Claim (`admin == true`) or
+    // existence of `/admins/{uid}` in the admin registry collection (managed only via Firebase Console / Admin SDK).
     function isAdmin() {
       return isSignedIn() && (
-        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
-        ('admin' in request.auth.token && request.auth.token.admin == true)
-      );
-    }
-
-    function isOrgAdmin(orgId) {
-      return isSignedIn() && isValidId(orgId) && (
-        isAdmin() ||
-        ('orgId' in request.auth.token && request.auth.token.orgId == orgId) ||
-        (exists(/databases/$(database)/documents/organizations/$(orgId)) &&
-         request.auth.uid in get(/databases/$(database)/documents/organizations/$(orgId)).data.adminUids)
+        request.auth.token.admin == true ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
       );
     }
 
     function isValidBloodGroup(bg) {
       return bg is string && bg in [
-        'A_POSITIVE', 'A_NEGATIVE',
-        'B_POSITIVE', 'B_NEGATIVE',
-        'O_POSITIVE', 'O_NEGATIVE',
-        'AB_POSITIVE', 'AB_NEGATIVE'
+        'A_POSITIVE', 'A_NEGATIVE', 'B_POSITIVE', 'B_NEGATIVE',
+        'O_POSITIVE', 'O_NEGATIVE', 'AB_POSITIVE', 'AB_NEGATIVE'
       ];
     }
 
-    function isValidAvailability(avail) {
+    function isValidDonorAvailability(avail) {
       return avail is string && avail in [
         'AVAILABLE', 'RESTING', 'EMERGENCY_ONLY', 'UNAVAILABLE'
       ];
     }
 
-    function isValidVerificationStatus(status) {
-      return status is string && status in [
-        'UNVERIFIED', 'PENDING', 'VERIFIED', 'REJECTED'
+    function isValidVerificationStatus(st) {
+      return st is string && st in [
+        'UNVERIFIED', 'PENDING', 'PENDING_REVIEW', 'VERIFIED', 'REJECTED'
       ];
     }
 
-    function isValidUserRole(role) {
-      return role is string && role in [
-        'USER', 'ORG_ADMIN', 'SUPER_ADMIN'
+    function isValidAccountStatus(st) {
+      return st is string && st in [
+        'ACTIVE', 'SUSPENDED', 'DELETED'
       ];
     }
 
-    function isValidUrgency(urgency) {
-      return urgency is string && urgency in [
+    function isValidUrgency(u) {
+      return u is string && u in [
         'STANDARD', 'HIGH', 'CRITICAL_EMERGENCY'
       ];
     }
 
-    function isValidRequestStatus(status) {
-      return status is string && status in [
-        'PENDING', 'DONOR_RESPONDED', 'ACCEPTED', 'FULFILLED', 'CANCELLED', 'EXPIRED'
+    function isValidRequestStatus(s) {
+      return s is string && s in [
+        'PENDING', 'OPEN', 'DONOR_RESPONDED', 'ACCEPTED', 'FULFILLED', 'CANCELLED', 'EXPIRED'
       ];
     }
 
     // =========================================================================
-    // Entity Schema Validation Helpers
+    // Entity Schema Validators
     // =========================================================================
 
-    function isValidUserProfile(data) {
-      return data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128 &&
-             data.name is string && data.name.size() >= 2 && data.name.size() <= 100 &&
-             data.email is string && data.email.size() >= 3 && data.email.size() <= 150 &&
-             isValidBloodGroup(data.bloodGroup) &&
-             (!('dateOfBirth' in data) || data.dateOfBirth == null || (data.dateOfBirth is string && data.dateOfBirth.size() <= 30)) &&
-             data.isDonor is bool &&
-             isValidAvailability(data.donorAvailability) &&
-             (!('lastDonationDate' in data) || data.lastDonationDate == null || data.lastDonationDate is int) &&
-             (!('isEmergencyDonor' in data) || data.isEmergencyDonor is bool) &&
-             data.contactPhone is string && data.contactPhone.size() >= 6 && data.contactPhone.size() <= 25 &&
-             data.showPhonePublicly is bool &&
-             (!('division' in data) || data.division == null || (data.division is string && data.division.size() <= 60)) &&
-             (!('district' in data) || data.district == null || (data.district is string && data.district.size() <= 60)) &&
-             (!('upazila' in data) || data.upazila == null || (data.upazila is string && data.upazila.size() <= 60)) &&
-             (!('area' in data) || data.area == null || (data.area is string && data.area.size() <= 100)) &&
-             (!('city' in data) || data.city == null || (data.city is string && data.city.size() <= 60)) &&
-             (!('location' in data) || data.location == null || data.location is map) &&
-             isValidVerificationStatus(data.verificationStatus) &&
-             isValidUserRole(data.role) &&
-             (!('organizationId' in data) || data.organizationId == null || (data.organizationId is string && data.organizationId.size() <= 128)) &&
-             data.donationCount is int && data.donationCount >= 0 &&
-             (!('badges' in data) || (data.badges is list && data.badges.size() <= 20)) &&
-             (!('photoUrl' in data) || data.photoUrl == null || (data.photoUrl is string && data.photoUrl.size() <= 500)) &&
-             (!('fcmToken' in data) || data.fcmToken == null || (data.fcmToken is string && data.fcmToken.size() <= 500)) &&
-             data.createdAt is int &&
-             (!('updatedAt' in data) || data.updatedAt == null || data.updatedAt is int);
+    function isValidUserProfile(data, userId) {
+      return data.uid == userId
+        && data.name is string
+        && data.name.size() >= 2
+        && data.name.size() <= 100
+        && (!('email' in data) || (data.email is string && data.email.size() <= 150))
+        && isValidBloodGroup(data.bloodGroup)
+        && (!('isDonor' in data) || data.isDonor is bool)
+        && (!('donorAvailability' in data) || isValidDonorAvailability(data.donorAvailability))
+        && (!('isEmergencyDonor' in data) || data.isEmergencyDonor is bool)
+        && (!('contactPhone' in data) || (data.contactPhone is string && data.contactPhone.size() <= 20))
+        && (!('showPhonePublicly' in data) || data.showPhonePublicly is bool)
+        && (!('division' in data) || (data.division is string && data.division.size() >= 2 && data.division.size() <= 60))
+        && (!('district' in data) || (data.district is string && data.district.size() >= 2 && data.district.size() <= 60))
+        && (!('upazila' in data) || (data.upazila is string && data.upazila.size() <= 80))
+        && (!('area' in data) || (data.area is string && data.area.size() <= 120))
+        && (!('city' in data) || (data.city is string && data.city.size() <= 60))
+        && isValidVerificationStatus(data.verificationStatus)
+        && data.role in ['USER', 'ORG_ADMIN', 'SUPER_ADMIN']
+        && (!('accountStatus' in data) || isValidAccountStatus(data.accountStatus))
+        && data.donationCount is int
+        && data.donationCount >= 0
+        && (!('badges' in data) || data.badges is list)
+        && (!('fcmToken' in data) || (data.fcmToken is string && data.fcmToken.size() <= 500))
+        && (!('photoUrl' in data) || (data.photoUrl is string && data.photoUrl.size() <= 500));
     }
 
-    function isValidPublicDonor(data) {
-      return data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128 &&
-             data.name is string && data.name.size() >= 2 && data.name.size() <= 100 &&
-             isValidBloodGroup(data.bloodGroup) &&
-             isValidAvailability(data.availability) &&
-             data.division is string && data.division.size() <= 60 &&
-             data.district is string && data.district.size() <= 60 &&
-             data.upazila is string && data.upazila.size() <= 60 &&
-             data.area is string && data.area.size() <= 100 &&
-             (!('generalLocation' in data) || (data.generalLocation is string && data.generalLocation.size() <= 200)) &&
-             data.isDonor is bool &&
-             (!('isEmergencyDonor' in data) || data.isEmergencyDonor is bool) &&
-             (!('contactPhone' in data) || (data.contactPhone is string && data.contactPhone.size() <= 25)) &&
-             isValidVerificationStatus(data.verificationStatus) &&
-             data.donationCount is int && data.donationCount >= 0 &&
-             (!('lastDonationDate' in data) || data.lastDonationDate == null || data.lastDonationDate is int) &&
-             (!('updatedAt' in data) || data.updatedAt == null || data.updatedAt is int);
+    function isValidPublicDonor(data, userId) {
+      return data.uid == userId
+        && data.isDonor == true
+        && data.name is string
+        && data.name.size() >= 2
+        && data.name.size() <= 100
+        && isValidBloodGroup(data.bloodGroup)
+        && (!('availability' in data) || isValidDonorAvailability(data.availability))
+        && (!('division' in data) || (data.division is string && data.division.size() >= 2 && data.division.size() <= 60))
+        && (!('district' in data) || (data.district is string && data.district.size() >= 2 && data.district.size() <= 60))
+        && (!('upazila' in data) || (data.upazila is string && data.upazila.size() <= 80))
+        && (!('area' in data) || (data.area is string && data.area.size() <= 120))
+        && (!('generalLocation' in data) || (data.generalLocation is string && data.generalLocation.size() <= 250))
+        && (!('isEmergencyDonor' in data) || data.isEmergencyDonor is bool)
+        && data.showPhonePublicly is bool
+        && data.contactPhone is string
+        && data.contactPhone.size() <= 20
+        && (!data.showPhonePublicly || data.contactPhone.size() >= 8)
+        && (data.showPhonePublicly || data.contactPhone == '')
+        && isValidVerificationStatus(data.verificationStatus)
+        && data.donationCount is int
+        && data.donationCount >= 0;
+    }
+
+    function getReqOwnerUid(data) {
+      return ('requesterUid' in data && data.requesterUid is string && data.requesterUid.size() > 0)
+        ? data.requesterUid
+        : (('requesterId' in data && data.requesterId is string) ? data.requesterId : '');
+    }
+
+    function getReqUnits(data) {
+      return ('unitsRequired' in data && data.unitsRequired is int)
+        ? data.unitsRequired
+        : (('bagsNeeded' in data && data.bagsNeeded is int) ? data.bagsNeeded : 0);
     }
 
     function isValidBloodRequest(data) {
-      return data.requesterUid is string && data.requesterUid.size() >= 1 && data.requesterUid.size() <= 128 &&
-             data.requesterName is string && data.requesterName.size() >= 1 && data.requesterName.size() <= 100 &&
-             data.patientName is string && data.patientName.size() >= 2 && data.patientName.size() <= 100 &&
-             data.patientAge is int && data.patientAge >= 0 && data.patientAge <= 130 &&
-             isValidBloodGroup(data.bloodGroup) &&
-             data.unitsRequired is int && data.unitsRequired >= 1 && data.unitsRequired <= 20 &&
-             data.hospitalName is string && data.hospitalName.size() >= 2 && data.hospitalName.size() <= 150 &&
-             (!('hospitalAddress' in data) || (data.hospitalAddress is string && data.hospitalAddress.size() <= 200)) &&
-             data.division is string && data.division.size() >= 1 && data.division.size() <= 60 &&
-             data.district is string && data.district.size() >= 1 && data.district.size() <= 60 &&
-             (!('upazila' in data) || (data.upazila is string && data.upazila.size() <= 60)) &&
-             (!('area' in data) || (data.area is string && data.area.size() <= 100)) &&
-             data.city is string && data.city.size() >= 1 && data.city.size() <= 60 &&
-             isValidUrgency(data.urgency) &&
-             isValidRequestStatus(data.status) &&
-             data.contactPhone is string && data.contactPhone.size() >= 6 && data.contactPhone.size() <= 25 &&
-             (!('medicalReason' in data) || (data.medicalReason is string && data.medicalReason.size() <= 300)) &&
-             (!('acceptedDonorUid' in data) || data.acceptedDonorUid == null || (data.acceptedDonorUid is string && data.acceptedDonorUid.size() <= 128)) &&
-             (!('acceptedDonorName' in data) || data.acceptedDonorName == null || (data.acceptedDonorName is string && data.acceptedDonorName.size() <= 100)) &&
-             (!('respondedDonorUids' in data) || (data.respondedDonorUids is list && data.respondedDonorUids.size() <= 20)) &&
-             (!('isEmergencyBroadcast' in data) || data.isEmergencyBroadcast is bool) &&
-             data.createdAt is int &&
-             (!('updatedAt' in data) || data.updatedAt == null || data.updatedAt is int) &&
-             (!('expiresAt' in data) || data.expiresAt == null || data.expiresAt is int);
+      let ownerUid = getReqOwnerUid(data);
+      let units = getReqUnits(data);
+      return ownerUid.size() >= 1
+        && ownerUid.size() <= 128
+        && (!('requesterName' in data) || (data.requesterName is string && data.requesterName.size() <= 100))
+        && data.patientName is string
+        && data.patientName.size() >= 2
+        && data.patientName.size() <= 100
+        && (!('patientAge' in data) || (data.patientAge is int && data.patientAge >= 0 && data.patientAge <= 130))
+        && isValidBloodGroup(data.bloodGroup)
+        && units >= 1
+        && units <= 15
+        && (!('unitsFulfilled' in data) || (data.unitsFulfilled is int && data.unitsFulfilled >= 0 && data.unitsFulfilled <= units))
+        && (!('bagsPledged' in data) || (data.bagsPledged is int && data.bagsPledged >= 0 && data.bagsPledged <= units))
+        && data.hospitalName is string
+        && data.hospitalName.size() >= 2
+        && data.hospitalName.size() <= 150
+        && (!('hospitalAddress' in data) || (data.hospitalAddress is string && data.hospitalAddress.size() <= 250))
+        && (!('division' in data) || (data.division is string && data.division.size() >= 2 && data.division.size() <= 60))
+        && (!('district' in data) || (data.district is string && data.district.size() >= 2 && data.district.size() <= 60))
+        && (!('upazila' in data) || (data.upazila is string && data.upazila.size() <= 80))
+        && (!('area' in data) || (data.area is string && data.area.size() <= 120))
+        && (!('city' in data) || (data.city is string && data.city.size() >= 2 && data.city.size() <= 60))
+        && (!('urgency' in data) || isValidUrgency(data.urgency))
+        && isValidRequestStatus(data.status)
+        && data.contactPhone is string
+        && data.contactPhone.size() >= 8
+        && data.contactPhone.size() <= 16
+        && (!('medicalReason' in data) || (data.medicalReason is string && data.medicalReason.size() <= 500))
+        && (!('createdAt' in data) || data.createdAt is int)
+        && (!('updatedAt' in data) || data.updatedAt is int)
+        && (!('expiresAt' in data) || data.expiresAt is int);
     }
 
-    function isValidDonationRecord(data) {
-      return data.donorUid is string && data.donorUid.size() >= 1 && data.donorUid.size() <= 128 &&
-             data.donorName is string && data.donorName.size() >= 2 && data.donorName.size() <= 100 &&
-             isValidBloodGroup(data.bloodGroup) &&
-             (!('requestId' in data) || data.requestId == null || (data.requestId is string && data.requestId.size() <= 128)) &&
-             data.hospitalName is string && data.hospitalName.size() >= 2 && data.hospitalName.size() <= 150 &&
-             (!('city' in data) || (data.city is string && data.city.size() <= 60)) &&
-             data.donationDate is int &&
-             (!('verifiedByOrgId' in data) || data.verifiedByOrgId == null || (data.verifiedByOrgId is string && data.verifiedByOrgId.size() <= 128)) &&
-             (!('verifiedByOrgName' in data) || data.verifiedByOrgName == null || (data.verifiedByOrgName is string && data.verifiedByOrgName.size() <= 120)) &&
-             data.unitsDonated is int && data.unitsDonated >= 1 && data.unitsDonated <= 5 &&
-             (!('certificateCode' in data) || (data.certificateCode is string && data.certificateCode.size() <= 64));
+    function isValidReportCreate(data) {
+      return data.reporterUid == request.auth.uid
+        && (!('reporterName' in data) || (data.reporterName is string && data.reporterName.size() <= 100))
+        && data.targetUid is string
+        && data.targetUid.size() >= 1
+        && data.targetUid.size() <= 128
+        && data.targetUid != request.auth.uid
+        && (!('targetName' in data) || (data.targetName is string && data.targetName.size() <= 150))
+        && data.targetType is string
+        && data.targetType in ['USER', 'REQUEST', 'DONOR', 'CHAT', 'GENERAL']
+        && data.category is string
+        && data.category in ['FAKE_REQUEST', 'HARASSMENT', 'WRONG_INFO', 'MISUSE', 'SPAM', 'OTHER']
+        && (!('reasonBn' in data) || (data.reasonBn is string && data.reasonBn.size() <= 200))
+        && data.details is string
+        && data.details.size() >= 10
+        && data.details.size() <= 500
+        && (!('severity' in data) || (data.severity is string && data.severity in ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']))
+        && data.status == 'OPEN'
+        && (!('createdAt' in data) || data.createdAt is int);
     }
 
-    function isValidOrganization(data) {
-      return data.name is string && data.name.size() >= 2 && data.name.size() <= 120 &&
-             data.registrationNumber is string && data.registrationNumber.size() >= 2 && data.registrationNumber.size() <= 60 &&
-             (!('description' in data) || (data.description is string && data.description.size() <= 500)) &&
-             data.headquartersCity is string && data.headquartersCity.size() >= 2 && data.headquartersCity.size() <= 60 &&
-             (!('division' in data) || (data.division is string && data.division.size() <= 60)) &&
-             (!('district' in data) || (data.district is string && data.district.size() <= 60)) &&
-             (!('contactEmail' in data) || (data.contactEmail is string && data.contactEmail.size() <= 150)) &&
-             data.contactPhone is string && data.contactPhone.size() >= 6 && data.contactPhone.size() <= 25 &&
-             data.isVerified is bool &&
-             data.adminUids is list && data.adminUids.size() >= 1 && data.adminUids.size() <= 10 && data.adminUids[0] is string &&
-             (!('memberCount' in data) || (data.memberCount is int && data.memberCount >= 0)) &&
-             (!('totalBagsCollected' in data) || (data.totalBagsCollected is int && data.totalBagsCollected >= 0)) &&
-             data.createdAt is int;
-    }
-
-    function isValidCampaign(data) {
-      return data.organizationId is string && data.organizationId.size() >= 1 && data.organizationId.size() <= 128 &&
-             data.organizationName is string && data.organizationName.size() >= 2 && data.organizationName.size() <= 120 &&
-             data.title is string && data.title.size() >= 3 && data.title.size() <= 150 &&
-             (!('description' in data) || (data.description is string && data.description.size() <= 500)) &&
-             data.location is string && data.location.size() >= 2 && data.location.size() <= 150 &&
-             data.city is string && data.city.size() >= 2 && data.city.size() <= 60 &&
-             (!('startDate' in data) || data.startDate is int) &&
-             (!('endDate' in data) || data.endDate is int) &&
-             data.targetBags is int && data.targetBags >= 1 && data.targetBags <= 10000 &&
-             data.collectedBags is int && data.collectedBags >= 0 &&
-             (!('contactPhone' in data) || (data.contactPhone is string && data.contactPhone.size() <= 25)) &&
-             data.isActive is bool;
-    }
-
-    function isValidConversation(data) {
-      return data.participants is list &&
-             data.participants.size() == 2 &&
-             data.participants[0] is string &&
-             data.participants[1] is string &&
-             data.participants[0] != data.participants[1] &&
-             (!('participantNames' in data) || data.participantNames is map) &&
-             (!('participantBloodGroups' in data) || data.participantBloodGroups is map) &&
-             data.lastMessage is string && data.lastMessage.size() <= 1000 &&
-             data.lastMessageTimestamp is int &&
-             (!('requestId' in data) || data.requestId == null || (data.requestId is string && data.requestId.size() <= 128));
-    }
-
-    function isValidChatMessage(data) {
-      return data.conversationId is string && data.conversationId.size() >= 1 && data.conversationId.size() <= 128 &&
-             data.senderUid is string && data.senderUid.size() >= 1 && data.senderUid.size() <= 128 &&
-             data.senderName is string && data.senderName.size() >= 1 && data.senderName.size() <= 100 &&
-             data.text is string && data.text.size() >= 1 && data.text.size() <= 1000 &&
-             data.timestamp is int;
-    }
-
-    function isValidVerificationRequest(data) {
-      return data.applicantUid is string && data.applicantUid.size() >= 1 && data.applicantUid.size() <= 128 &&
-             data.name is string && data.name.size() >= 2 && data.name.size() <= 120 &&
-             data.type is string && data.type in ['DONOR', 'DONOR_CARD', 'ORGANIZATION'] &&
-             (!('documents' in data) || (data.documents is list && data.documents.size() <= 10)) &&
-             data.status is string && data.status in ['PENDING', 'APPROVED', 'REJECTED'] &&
-             data.submittedAt is int &&
-             (!('reviewedByUid' in data) || data.reviewedByUid == null || (data.reviewedByUid is string && data.reviewedByUid.size() <= 128)) &&
-             (!('reviewedAt' in data) || data.reviewedAt == null || data.reviewedAt is int);
+    function isValidAnnouncement(data) {
+      return data.titleBn is string
+        && data.titleBn.size() >= 3
+        && data.titleBn.size() <= 200
+        && data.bodyBn is string
+        && data.bodyBn.size() >= 5
+        && data.bodyBn.size() <= 2000
+        && (!('category' in data) || (data.category is string && data.category in ['GENERAL', 'EMERGENCY', 'MAINTENANCE', 'CAMPAIGN']))
+        && (!('targetAudience' in data) || (data.targetAudience is string && data.targetAudience in ['ALL_USERS', 'ACTIVE_DONORS', 'VERIFIED_DONORS', 'ORGANIZATIONS']))
+        && (!('targetDivision' in data) || (data.targetDivision is string && data.targetDivision.size() <= 60))
+        && (!('targetDistrict' in data) || (data.targetDistrict is string && data.targetDistrict.size() <= 60))
+        && data.status is string
+        && data.status in ['DRAFT', 'PUBLISHED']
+        && (!('createdByUid' in data) || (data.createdByUid is string && data.createdByUid.size() <= 128))
+        && (!('createdByEmail' in data) || (data.createdByEmail is string && data.createdByEmail.size() <= 150))
+        && (!('createdAt' in data) || data.createdAt is int)
+        && (!('publishedAt' in data) || data.publishedAt == null || data.publishedAt is int)
+        && (!('recipientCount' in data) || (data.recipientCount is int && data.recipientCount >= 0));
     }
 
     // =========================================================================
-    // 0. Trusted Admin Registry (Server-Managed Only)
+    // 0. ADMIN REGISTRY (/admins/{adminId})
+    // Client writes are completely disabled; managed strictly via Firebase Console / Admin SDK.
     // =========================================================================
-    match /admins/{adminUid} {
-      allow get: if isSignedIn() && isValidId(adminUid) && (isOwner(adminUid) || isAdmin());
-      allow list, create, update, delete: if false;
+    match /admins/{adminId} {
+      allow read: if isOwner(adminId) || isAdmin();
+      allow write: if false;
     }
 
     // =========================================================================
-    // 1. Private User Profiles (/users/{userId}) - Strictly Isolated PII
+    // 1. PRIVATE USER PROFILES (/users/{userId})
     // =========================================================================
     match /users/{userId} {
-      // Only the profile owner or a system admin may read private PII (email, DOB, private phone, FCM token)
-      allow get: if isSignedIn() && isValidId(userId) && (isOwner(userId) || isAdmin());
-      allow list: if isSignedIn() && (resource.data.uid == request.auth.uid || isAdmin());
+      allow read: if isOwner(userId) || isAdmin();
 
-      // Users can create only their own profile with unprivileged initial values (or designated admin profile)
-      allow create: if isSignedIn() &&
-                       isValidId(userId) &&
-                       isOwner(userId) &&
-                       isValidUserProfile(incoming()) &&
-                       incoming().uid == request.auth.uid && (
-                         (incoming().role == 'USER' &&
-                          incoming().verificationStatus == 'UNVERIFIED' &&
-                          incoming().donationCount == 0 &&
-                          incoming().isEmergencyDonor == false) ||
-                         isAdmin()
-                       );
+      allow create: if isOwner(userId)
+        && isValidUserProfile(request.resource.data, userId)
+        && request.resource.data.role == 'USER'
+        && request.resource.data.verificationStatus == 'UNVERIFIED'
+        && (!('accountStatus' in request.resource.data) || request.resource.data.accountStatus == 'ACTIVE')
+        && request.resource.data.donationCount == 0
+        && (!('isEmergencyDonor' in request.resource.data) || request.resource.data.isEmergencyDonor == false)
+        && (!('badges' in request.resource.data) || request.resource.data.badges.size() == 0);
 
-      // Users can update only permitted profile fields; privileged & immutable fields are locked
-      allow update: if isSignedIn() &&
-                       isValidId(userId) &&
-                       isValidUserProfile(incoming()) && (
-                         (isOwner(userId) &&
-                          incoming().uid == existing().uid &&
-                          incoming().role == existing().role &&
-                          (incoming().verificationStatus == existing().verificationStatus ||
-                           (existing().verificationStatus in ['UNVERIFIED', 'REJECTED', 'PENDING'] &&
-                            incoming().verificationStatus == 'PENDING')) &&
-                          incoming().donationCount == existing().donationCount &&
-                          incoming().createdAt == existing().createdAt &&
-                          !incoming().diff(existing()).affectedKeys().hasAny([
-                            'uid', 'role', 'donationCount', 'badges', 'organizationId', 'createdAt'
-                          ])) ||
-                         isAdmin()
-                       );
+      allow update: if isAdmin() || (
+        isOwner(userId)
+        && isValidUserProfile(request.resource.data, userId)
+        && request.resource.data.uid == resource.data.uid
+        && request.resource.data.role == resource.data.role
+        && request.resource.data.verificationStatus == resource.data.verificationStatus
+        && (!('accountStatus' in resource.data) || request.resource.data.accountStatus == resource.data.accountStatus)
+        && request.resource.data.donationCount == resource.data.donationCount
+        && (!('badges' in resource.data) || request.resource.data.badges == resource.data.badges)
+      );
 
-      allow delete: if isSignedIn() && isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow delete: if isOwner(userId) || isAdmin();
 
-      // User Notifications Subcollection
+      // Ordinary users cannot create notifications for others; only admins or Cloud Functions can create.
       match /notifications/{notificationId} {
-        allow get: if isSignedIn() && isValidId(userId) && isValidId(notificationId) && (isOwner(userId) || isAdmin());
-        allow list: if isSignedIn() && isValidId(userId) && (isOwner(userId) || isAdmin());
-        allow create: if isAdmin();
-        allow update: if isSignedIn() &&
-                         isValidId(userId) &&
-                         isValidId(notificationId) &&
-                         isOwner(userId) &&
-                         incoming().diff(existing()).affectedKeys().hasOnly(['isRead']) &&
-                         incoming().isRead is bool;
-        allow delete: if isSignedIn() && isValidId(userId) && isValidId(notificationId) && (isOwner(userId) || isAdmin());
+        allow read, update, delete: if isOwner(userId) || isAdmin();
+        allow create: if isAdmin()
+          && request.resource.data.recipientUid == userId
+          && request.resource.data.title is string
+          && request.resource.data.title.size() >= 1
+          && request.resource.data.title.size() <= 200
+          && request.resource.data.body is string
+          && request.resource.data.body.size() >= 1
+          && request.resource.data.body.size() <= 1000
+          && request.resource.data.isRead == false;
       }
     }
 
     // =========================================================================
-    // 2. Sanitized Public Donor Directory (/public_donors/{donorUid})
+    // 2. PUBLIC DONOR DIRECTORY (/public_donors/{userId})
     // =========================================================================
-    match /public_donors/{donorUid} {
-      allow get: if isSignedIn() && isValidId(donorUid) && (resource.data.isDonor == true || isOwner(donorUid) || isAdmin());
-      allow list: if isSignedIn() && (resource.data.isDonor == true || isAdmin());
+    match /public_donors/{userId} {
+      allow read: if isSignedIn();
 
-      allow create: if isSignedIn() &&
-                       isValidId(donorUid) &&
-                       isOwner(donorUid) &&
-                       isValidPublicDonor(incoming()) &&
-                       incoming().uid == request.auth.uid && (
-                         (incoming().verificationStatus == 'UNVERIFIED' &&
-                          incoming().donationCount == 0) ||
-                         isAdmin()
-                       );
+      allow create: if isAdmin() || (
+        isOwner(userId)
+        && isValidPublicDonor(request.resource.data, userId)
+        && request.resource.data.verificationStatus == 'UNVERIFIED'
+        && request.resource.data.donationCount == 0
+      );
 
-      allow update: if isSignedIn() &&
-                       isValidId(donorUid) &&
-                       isValidPublicDonor(incoming()) && (
-                         (isOwner(donorUid) &&
-                          incoming().uid == existing().uid &&
-                          (incoming().verificationStatus == existing().verificationStatus ||
-                           (existing().verificationStatus in ['UNVERIFIED', 'REJECTED', 'PENDING'] &&
-                            incoming().verificationStatus == 'PENDING')) &&
-                          incoming().donationCount == existing().donationCount &&
-                          !incoming().diff(existing()).affectedKeys().hasAny([
-                            'uid', 'donationCount'
-                          ])) ||
-                         isAdmin()
-                       );
+      allow update: if isAdmin() || (
+        isOwner(userId)
+        && isValidPublicDonor(request.resource.data, userId)
+        && request.resource.data.verificationStatus == resource.data.verificationStatus
+        && request.resource.data.donationCount == resource.data.donationCount
+        && (!('badges' in resource.data) || request.resource.data.badges == resource.data.badges)
+      );
 
-      allow delete: if isSignedIn() && isValidId(donorUid) && (isOwner(donorUid) || isAdmin());
+      allow delete: if isOwner(userId) || isAdmin();
     }
 
     // =========================================================================
-    // 3. Emergency Blood Requests (/blood_requests/{requestId})
+    // 3. BLOOD REQUESTS (/blood_requests/{requestId})
     // =========================================================================
     match /blood_requests/{requestId} {
-      allow get: if isSignedIn() && isValidId(requestId);
-      allow list: if isSignedIn() && (
-        resource.data.status in ['PENDING', 'DONOR_RESPONDED', 'ACCEPTED', 'FULFILLED', 'CANCELLED', 'EXPIRED']
-      );
+      allow read: if isSignedIn();
 
-      allow create: if isSignedIn() &&
-                       isValidId(requestId) &&
-                       isValidBloodRequest(incoming()) &&
-                       incoming().requesterUid == request.auth.uid &&
-                       incoming().status == 'PENDING' &&
-                       (!('acceptedDonorUid' in incoming()) || incoming().acceptedDonorUid == null || incoming().acceptedDonorUid == '');
+      allow create: if isSignedIn()
+        && isValidBloodRequest(request.resource.data)
+        && getReqOwnerUid(request.resource.data) == request.auth.uid
+        && request.resource.data.status in ['PENDING', 'OPEN']
+        && (!('unitsFulfilled' in request.resource.data) || request.resource.data.unitsFulfilled == 0)
+        && (!('bagsPledged' in request.resource.data) || request.resource.data.bagsPledged == 0)
+        && (!('acceptedDonorUid' in request.resource.data) || request.resource.data.acceptedDonorUid == null);
 
-      allow update: if isSignedIn() &&
-                       isValidId(requestId) &&
-                       isValidBloodRequest(incoming()) &&
-                       incoming().requesterUid == existing().requesterUid &&
-                       incoming().createdAt == existing().createdAt && (
-                         isAdmin() ||
-                         (
-                           // Terminal state lock: cannot mutate once FULFILLED, CANCELLED, or EXPIRED
-                           !(existing().status in ['FULFILLED', 'CANCELLED', 'EXPIRED']) && (
-                             // Action 1: Authorized Donor responds/commits to a PENDING request (cannot self-accept own request)
-                             (request.auth.uid != existing().requesterUid &&
-                              existing().status == 'PENDING' &&
-                              incoming().status in ['DONOR_RESPONDED', 'ACCEPTED'] &&
-                              incoming().acceptedDonorUid == request.auth.uid &&
-                              incoming().diff(existing()).affectedKeys().hasOnly([
-                                'status', 'acceptedDonorUid', 'acceptedDonorName', 'respondedDonorUids', 'updatedAt'
-                              ])) ||
-                             // Action 2: Requester cancels their active request
-                             (isOwner(existing().requesterUid) &&
-                              existing().status in ['PENDING', 'DONOR_RESPONDED', 'ACCEPTED'] &&
-                              incoming().status == 'CANCELLED' &&
-                              incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])) ||
-                             // Action 3: Requester marks request FULFILLED only after a donor has responded/accepted
-                             (isOwner(existing().requesterUid) &&
-                              existing().status in ['DONOR_RESPONDED', 'ACCEPTED'] &&
-                              existing().acceptedDonorUid != null &&
-                              existing().acceptedDonorUid != '' &&
-                              incoming().status == 'FULFILLED' &&
-                              incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])) ||
-                             // Action 4: Requester updates request details while still PENDING
-                             (isOwner(existing().requesterUid) &&
-                              existing().status == 'PENDING' &&
-                              incoming().status == 'PENDING' &&
-                              incoming().diff(existing()).affectedKeys().hasOnly([
-                                'patientName', 'patientAge', 'unitsRequired', 'hospitalName',
-                                'hospitalAddress', 'division', 'district', 'upazila', 'area',
-                                'city', 'urgency', 'contactPhone', 'medicalReason', 'updatedAt'
-                              ]))
-                           )
-                         )
-                       );
+      allow update: if isAdmin()
+        // (4a) Request owner editing allowed details while status is PENDING or OPEN
+        || (
+          isSignedIn()
+          && getReqOwnerUid(resource.data) == request.auth.uid
+          && resource.data.status in ['PENDING', 'OPEN']
+          && request.resource.data.status == resource.data.status
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'patientName', 'patientAge', 'unitsRequired', 'bagsNeeded',
+            'hospitalName', 'hospitalAddress', 'division', 'district',
+            'upazila', 'area', 'area_lower', 'city', 'urgency',
+            'contactPhone', 'medicalReason', 'updatedAt'
+          ])
+          && isValidBloodRequest(request.resource.data)
+        )
+        // (4b) Request owner cancelling or marking fulfilled via status + updatedAt only
+        || (
+          isSignedIn()
+          && getReqOwnerUid(resource.data) == request.auth.uid
+          && resource.data.status in ['PENDING', 'OPEN', 'DONOR_RESPONDED', 'ACCEPTED']
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt'])
+          && request.resource.data.status in ['CANCELLED', 'FULFILLED']
+          && (!('updatedAt' in request.resource.data) || request.resource.data.updatedAt is int)
+        )
+        // (4c) Non-owner donor accepting / responding to an open/pending request
+        || (
+          isSignedIn()
+          && getReqOwnerUid(resource.data) != request.auth.uid
+          && resource.data.status in ['PENDING', 'OPEN', 'DONOR_RESPONDED']
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'status', 'acceptedDonorUid', 'acceptedDonorName',
+            'respondedDonorUids', 'acceptedDonorIds',
+            'unitsFulfilled', 'bagsPledged', 'updatedAt'
+          ])
+          && request.resource.data.status in ['OPEN', 'PENDING', 'DONOR_RESPONDED', 'ACCEPTED']
+          && (
+            (!('acceptedDonorUid' in request.resource.data) || request.resource.data.acceptedDonorUid == request.auth.uid)
+            && (!('acceptedDonorName' in request.resource.data) || (
+              request.resource.data.acceptedDonorName is string
+              && request.resource.data.acceptedDonorName.size() >= 2
+              && request.resource.data.acceptedDonorName.size() <= 100
+            ))
+            && (!('respondedDonorUids' in request.resource.data) || (
+              request.resource.data.respondedDonorUids is list
+              && request.resource.data.respondedDonorUids.size() <= 20
+              && (request.auth.uid in request.resource.data.respondedDonorUids)
+            ))
+            && (!('acceptedDonorIds' in request.resource.data) || (
+              !(request.auth.uid in resource.data.acceptedDonorIds)
+              && request.resource.data.acceptedDonorIds.hasAll(resource.data.acceptedDonorIds)
+              && request.resource.data.acceptedDonorIds.size() == resource.data.acceptedDonorIds.size() + 1
+              && (request.auth.uid in request.resource.data.acceptedDonorIds)
+            ))
+            && (!('unitsFulfilled' in request.resource.data) || (
+              request.resource.data.unitsFulfilled is int
+              && request.resource.data.unitsFulfilled >= 1
+              && request.resource.data.unitsFulfilled <= getReqUnits(resource.data)
+            ))
+            && (!('bagsPledged' in request.resource.data) || (
+              request.resource.data.bagsPledged == resource.data.bagsPledged + 1
+            ))
+          )
+        );
 
-      allow delete: if isSignedIn() && isValidId(requestId) && (
-        (isOwner(existing().requesterUid) && existing().status in ['PENDING', 'CANCELLED']) ||
-        isAdmin()
-      );
+      allow delete: if isAdmin() || (isSignedIn() && getReqOwnerUid(resource.data) == request.auth.uid);
     }
 
     // =========================================================================
-    // 4. Verified Donation Records (/donations/{donationId})
+    // 4. DONATION HISTORY (/donation_history/{recordId})
     // =========================================================================
-    match /donations/{donationId} {
-      allow get: if isSignedIn() && isValidId(donationId) && (
-        resource.data.donorUid == request.auth.uid ||
-        isAdmin() ||
-        (resource.data.verifiedByOrgId != null && isOrgAdmin(resource.data.verifiedByOrgId))
+    match /donation_history/{recordId} {
+      allow read: if isSignedIn() && (
+        resource.data.donorId == request.auth.uid
+        || ('donorUid' in resource.data && resource.data.donorUid == request.auth.uid)
+        || isAdmin()
       );
-      allow list: if isSignedIn() && (
-        resource.data.donorUid == request.auth.uid ||
-        isAdmin()
-      );
-
-      // Users cannot create or forge their own donation records
-      allow create, update: if isSignedIn() &&
-                               isValidId(donationId) &&
-                               isValidDonationRecord(incoming()) && (
-                                 isAdmin() ||
-                                 (incoming().verifiedByOrgId != null && isOrgAdmin(incoming().verifiedByOrgId))
-                               );
-      allow delete: if isSignedIn() && isValidId(donationId) && isAdmin();
+      allow create: if isSignedIn()
+        && request.resource.data.donorId == request.auth.uid
+        && request.resource.data.bags == 1
+        && request.resource.data.hospitalName is string
+        && request.resource.data.hospitalName.size() >= 2
+        && request.resource.data.hospitalName.size() <= 150
+        && (isAdmin() || request.resource.data.verifiedByRequester == false);
+      allow update, delete: if isAdmin();
     }
 
     // =========================================================================
-    // 5. Organizations (/organizations/{orgId})
+    // 5. CHAT CONVERSATIONS & MESSAGES (/conversations/{conversationId})
     // =========================================================================
-    match /organizations/{orgId} {
-      allow get: if isSignedIn() && isValidId(orgId);
-      allow list: if isSignedIn() && (
-        resource.data.isVerified == true ||
-        request.auth.uid in resource.data.adminUids ||
-        isAdmin()
-      );
-
-      // Organization creation starts unverified and requires admin approval
-      allow create: if isSignedIn() &&
-                       isValidId(orgId) &&
-                       isValidOrganization(incoming()) &&
-                       incoming().isVerified == false &&
-                       incoming().totalBagsCollected == 0 &&
-                       request.auth.uid in incoming().adminUids;
-
-      // Org admins can update details, but CANNOT self-verify or alter registration/bag counts
-      allow update: if isSignedIn() &&
-                       isValidId(orgId) &&
-                       isValidOrganization(incoming()) && (
-                         (isOrgAdmin(orgId) &&
-                          incoming().isVerified == existing().isVerified &&
-                          incoming().registrationNumber == existing().registrationNumber &&
-                          incoming().createdAt == existing().createdAt &&
-                          !incoming().diff(existing()).affectedKeys().hasAny([
-                            'isVerified', 'registrationNumber', 'totalBagsCollected', 'createdAt'
-                          ])) ||
-                         isAdmin()
-                       );
-
-      allow delete: if isSignedIn() && isValidId(orgId) && isAdmin();
-
-      match /campaigns/{campaignId} {
-        allow get, list: if isSignedIn() && isValidId(orgId);
-        allow create, update: if isSignedIn() && isValidId(orgId) && isValidId(campaignId) && isValidCampaign(incoming()) && isOrgAdmin(orgId);
-        allow delete: if isSignedIn() && isValidId(orgId) && isValidId(campaignId) && isOrgAdmin(orgId);
+    match /conversations/{conversationId} {
+      function isParticipant() {
+        return isSignedIn() && (
+          ('participantIds' in resource.data && request.auth.uid in resource.data.participantIds)
+          || ('participants' in resource.data && request.auth.uid in resource.data.participants)
+        );
       }
-    }
+      function isCreatingParticipant() {
+        return isSignedIn() && (
+          ('participantIds' in request.resource.data
+            && request.resource.data.participantIds is list
+            && request.resource.data.participantIds.size() == 2
+            && request.auth.uid in request.resource.data.participantIds)
+          || ('participants' in request.resource.data
+            && request.resource.data.participants is list
+            && request.resource.data.participants.size() == 2
+            && request.auth.uid in request.resource.data.participants)
+        );
+      }
 
-    // =========================================================================
-    // 6. Top-Level Campaigns (/campaigns/{campaignId})
-    // =========================================================================
-    match /campaigns/{campaignId} {
-      allow get: if isSignedIn() && isValidId(campaignId);
-      allow list: if isSignedIn() && (resource.data.isActive == true || isAdmin());
-      allow create: if isSignedIn() &&
-                       isValidId(campaignId) &&
-                       isValidCampaign(incoming()) && (
-                         isAdmin() ||
-                         isOrgAdmin(incoming().organizationId) ||
-                         incoming().organizationId == request.auth.uid
-                       );
-      allow update: if isSignedIn() &&
-                       isValidId(campaignId) &&
-                       isValidCampaign(incoming()) && (
-                         isAdmin() ||
-                         isOrgAdmin(existing().organizationId) ||
-                         (existing().organizationId == request.auth.uid &&
-                          incoming().organizationId == existing().organizationId)
-                       );
-      allow delete: if isSignedIn() && isValidId(campaignId) && isAdmin();
-    }
-
-    // =========================================================================
-    // 7. 1-to-1 Conversations & Messages (/conversations/{convId})
-    // =========================================================================
-    match /conversations/{convId} {
-      allow get: if isSignedIn() && isValidId(convId) && (request.auth.uid in resource.data.participants);
-      allow list: if isSignedIn() && (request.auth.uid in resource.data.participants);
-
-      allow create: if isSignedIn() &&
-                       isValidId(convId) &&
-                       isValidConversation(incoming()) &&
-                       (request.auth.uid in incoming().participants);
-
-      // Participants CANNOT modify the participants list after creation
-      allow update: if isSignedIn() &&
-                       isValidId(convId) &&
-                       isValidConversation(incoming()) &&
-                       (request.auth.uid in existing().participants) &&
-                       incoming().participants == existing().participants &&
-                       incoming().diff(existing()).affectedKeys().hasOnly([
-                         'lastMessage', 'lastMessageTimestamp', 'participantNames', 'participantBloodGroups', 'requestId'
-                       ]);
-
-      allow delete: if false;
+      allow read: if isParticipant() || isAdmin();
+      allow create: if isCreatingParticipant();
+      allow update: if isParticipant()
+        && (!('participantIds' in resource.data) || request.resource.data.participantIds == resource.data.participantIds)
+        && (!('participants' in resource.data) || request.resource.data.participants == resource.data.participants);
+      allow delete: if isAdmin();
 
       match /messages/{messageId} {
-        allow get, list: if isSignedIn() &&
-                            isValidId(convId) &&
-                            (request.auth.uid in get(/databases/$(database)/documents/conversations/$(convId)).data.participants);
+        function isConvParticipant() {
+          let conv = get(/databases/$(database)/documents/conversations/$(conversationId)).data;
+          return ('participantIds' in conv && request.auth.uid in conv.participantIds)
+            || ('participants' in conv && request.auth.uid in conv.participants);
+        }
 
-        allow create: if isSignedIn() &&
-                         isValidId(convId) &&
-                         isValidId(messageId) &&
-                         isValidChatMessage(incoming()) &&
-                         incoming().conversationId == convId &&
-                         incoming().senderUid == request.auth.uid &&
-                         (request.auth.uid in get(/databases/$(database)/documents/conversations/$(convId)).data.participants);
-
+        allow read: if isSignedIn() && (isConvParticipant() || isAdmin());
+        allow create: if isSignedIn()
+          && isConvParticipant()
+          && (
+            ('senderId' in request.resource.data && request.resource.data.senderId == request.auth.uid)
+            || ('senderUid' in request.resource.data && request.resource.data.senderUid == request.auth.uid)
+          )
+          && request.resource.data.text is string
+          && request.resource.data.text.size() >= 1
+          && request.resource.data.text.size() <= 500;
         allow update, delete: if false;
       }
     }
 
     // =========================================================================
-    // 8. Verification Requests Queue (/verification_requests/{taskId})
+    // 6. ORGANIZATIONS & CAMPAIGNS (/organizations/{orgId}, /campaigns/{campaignId})
     // =========================================================================
-    match /verification_requests/{taskId} {
-      allow get: if isSignedIn() && isValidId(taskId) && (resource.data.applicantUid == request.auth.uid || isAdmin());
-      allow list: if isSignedIn() && (resource.data.applicantUid == request.auth.uid || isAdmin());
+    match /organizations/{orgId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
 
-      allow create: if isSignedIn() &&
-                       isValidId(taskId) &&
-                       isValidVerificationRequest(incoming()) &&
-                       incoming().applicantUid == request.auth.uid &&
-                       incoming().status == 'PENDING';
-
-      allow update, delete: if isSignedIn() && isValidId(taskId) && isAdmin();
+    match /campaigns/{campaignId} {
+      allow read: if isSignedIn();
+      allow create, update: if isAdmin()
+        && request.resource.data.title is string
+        && request.resource.data.title.size() >= 2
+        && request.resource.data.title.size() <= 150
+        && request.resource.data.city is string
+        && request.resource.data.city.size() >= 2;
+      allow delete: if isAdmin();
     }
 
     // =========================================================================
-    // 9. System Configuration & Audit Logs (Admin-Controlled)
+    // 7. REPORTS & COMPLAINTS (/reports/{reportId})
     // =========================================================================
-    match /system_config/{configId} {
-      allow get: if isSignedIn() && isValidId(configId);
-      allow list, create, update, delete: if isAdmin();
+    match /reports/{reportId} {
+      allow create: if isSignedIn() && isValidReportCreate(request.resource.data);
+      allow read: if isAdmin() || (isSignedIn() && resource.data.reporterUid == request.auth.uid);
+      allow update, delete: if isAdmin();
     }
 
+    // =========================================================================
+    // 8. VERIFICATION REQUESTS (/verification_requests/{reqId})
+    // =========================================================================
+    match /verification_requests/{reqId} {
+      allow create: if isSignedIn()
+        && request.resource.data.userUid == request.auth.uid
+        && request.resource.data.status == 'PENDING'
+        && request.resource.data.documentSummary is string
+        && request.resource.data.documentSummary.size() >= 3
+        && request.resource.data.documentSummary.size() <= 500;
+      allow read: if isAdmin() || (isSignedIn() && resource.data.userUid == request.auth.uid);
+      allow update, delete: if isAdmin();
+    }
+
+    // =========================================================================
+    // 9. ADMIN AUDIT LOGS (/audit_logs/{logId})
+    // =========================================================================
     match /audit_logs/{logId} {
-      allow get, list, create: if isAdmin();
+      allow read, create: if isAdmin();
       allow update, delete: if false;
+    }
+
+    // =========================================================================
+    // 10. SYSTEM CONFIGURATION (/system_settings/{docId})
+    // =========================================================================
+    match /system_settings/{docId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // =========================================================================
+    // 11. BLOOD BANKS (/blood_banks/{bankId})
+    // =========================================================================
+    match /blood_banks/{bankId} {
+      allow read: if isSignedIn();
+      allow create, update: if isAdmin()
+        && request.resource.data.name is string
+        && request.resource.data.name.size() >= 2
+        && request.resource.data.name.size() <= 150
+        && request.resource.data.city is string
+        && request.resource.data.city.size() >= 2
+        && request.resource.data.contactPhone is string
+        && request.resource.data.contactPhone.size() >= 3
+        && request.resource.data.contactPhone.size() <= 20;
+      allow delete: if isAdmin();
+    }
+
+    // =========================================================================
+    // 12. AMBULANCES (/ambulances/{ambulanceId})
+    // =========================================================================
+    match /ambulances/{ambulanceId} {
+      allow read: if isSignedIn();
+      allow create, update: if isAdmin()
+        && request.resource.data.providerName is string
+        && request.resource.data.providerName.size() >= 2
+        && request.resource.data.providerName.size() <= 150
+        && request.resource.data.city is string
+        && request.resource.data.city.size() >= 2
+        && request.resource.data.phone is string
+        && request.resource.data.phone.size() >= 3
+        && request.resource.data.phone.size() <= 20;
+      allow delete: if isAdmin();
+    }
+
+    // =========================================================================
+    // 13. BLOOD DONATION CAMPS (/blood_camps/{campId}) & RSVPs
+    // =========================================================================
+    match /blood_camps/{campId} {
+      allow read: if isSignedIn();
+      allow create, update: if isAdmin()
+        && request.resource.data.title is string
+        && request.resource.data.title.size() >= 2
+        && request.resource.data.title.size() <= 150
+        && request.resource.data.city is string
+        && request.resource.data.city.size() >= 2
+        && request.resource.data.contactPhone is string
+        && request.resource.data.contactPhone.size() >= 3
+        && request.resource.data.contactPhone.size() <= 20;
+      allow delete: if isAdmin();
+
+      match /rsvps/{uid} {
+        allow read: if isSignedIn();
+        allow create: if isOwner(uid)
+          && request.resource.data.uid == uid
+          && request.resource.data.campId == campId;
+        allow delete: if isOwner(uid) || isAdmin();
+        allow update: if false;
+      }
+    }
+
+    // =========================================================================
+    // 14. SYSTEM ANNOUNCEMENTS (/announcements/{announcementId})
+    // =========================================================================
+    match /announcements/{announcementId} {
+      allow read: if isAdmin() || (isSignedIn() && resource.data.status == 'PUBLISHED');
+      allow create, update: if isAdmin() && isValidAnnouncement(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    // =========================================================================
+    // 15. SECURITY ALERTS (/security_alerts/{alertId})
+    // =========================================================================
+    match /security_alerts/{alertId} {
+      allow read: if isAdmin();
+      allow create, update: if isAdmin()
+        && request.resource.data.alertType is string
+        && request.resource.data.alertType.size() >= 2
+        && request.resource.data.alertType.size() <= 80
+        && (!('severity' in request.resource.data) || request.resource.data.severity in ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'])
+        && request.resource.data.reviewStatus in ['OPEN', 'REVIEWED', 'RESOLVED', 'DISMISSED'];
+      allow delete: if isAdmin();
     }
   }
 }

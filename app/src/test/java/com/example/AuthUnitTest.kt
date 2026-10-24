@@ -244,4 +244,33 @@ class AuthUnitTest : FirestoreEmulatorTestBase() {
         assertFalse(defaultProfile.isEmergencyDonor)
         assertEquals(0, defaultProfile.donationCount)
     }
+
+    @Test
+    fun `test strict Bangladeshi mobile number validation`() {
+        assertTrue(com.example.data.firebase.FirebaseSecurityHelper.isValidPhoneNumber("01712345678"))
+        assertTrue(com.example.data.firebase.FirebaseSecurityHelper.isValidPhoneNumber("+8801812345678"))
+        assertTrue(com.example.data.firebase.FirebaseSecurityHelper.isValidPhoneNumber("8801912345678"))
+        assertTrue(com.example.data.firebase.FirebaseSecurityHelper.isValidPhoneNumber("01312345678"))
+
+        // Invalid operator prefix (011, 012) or wrong length
+        assertFalse(com.example.data.firebase.FirebaseSecurityHelper.isValidPhoneNumber("01112345678"))
+        assertFalse(com.example.data.firebase.FirebaseSecurityHelper.isValidPhoneNumber("01212345678"))
+        assertFalse(com.example.data.firebase.FirebaseSecurityHelper.isValidPhoneNumber("0171234567"))
+        assertFalse(com.example.data.firebase.FirebaseSecurityHelper.isValidPhoneNumber("123456"))
+    }
+
+    @Test
+    fun `test QR payload contains only uid and verification code without phone or email`() {
+        val profile = UserProfile(
+            uid = "donor_uid_777",
+            name = "Rahim Uddin",
+            email = "rahim.secret@example.com",
+            contactPhone = "01799887766"
+        )
+        val payload = com.example.ui.screens.donorcard.buildDonorQrPayload(profile)
+        assertTrue(payload.startsWith("ROKTOSETU:UID:donor_uid_777:CODE:"))
+        assertFalse(payload.contains("01799887766"))
+        assertFalse(payload.contains("rahim.secret@example.com"))
+    }
 }
+

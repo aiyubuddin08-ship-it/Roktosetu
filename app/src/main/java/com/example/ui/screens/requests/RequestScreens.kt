@@ -3,6 +3,7 @@ package com.example.ui.screens.requests
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -11,6 +12,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -26,6 +28,7 @@ import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.filled.HealthAndSafety
 import androidx.compose.material.icons.filled.LocalHospital
 import androidx.compose.material.icons.filled.Person
@@ -37,6 +40,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -64,6 +68,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -82,6 +87,7 @@ import com.example.model.RequestStatus
 import com.example.model.RequestUrgency
 import com.example.ui.components.AuthRequiredDialog
 import com.example.ui.components.BloodGroupBadge
+import com.example.ui.components.ReportSubmissionDialog
 import com.example.ui.components.StatusChip
 import com.example.ui.components.UrgencyBadge
 import com.example.ui.theme.BloodSuccessGreen
@@ -90,6 +96,7 @@ import com.example.ui.theme.EmergencyRedContainer
 import com.example.ui.viewmodel.AuthViewModel
 import com.example.ui.viewmodel.BloodViewModel
 import com.example.ui.viewmodel.ChatViewModel
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -101,6 +108,7 @@ fun CreateRequestScreen(
     onNavigateToLogin: () -> Unit = {},
     onNavigateToRegister: () -> Unit = {}
 ) {
+    val scope = rememberCoroutineScope()
     val currentUserProfile by authViewModel.currentUserProfile.collectAsState()
     val uiState by bloodViewModel.uiState.collectAsState()
 
@@ -117,6 +125,7 @@ fun CreateRequestScreen(
     var contactPhone by remember { mutableStateOf(currentUserProfile?.contactPhone ?: "") }
     var medicalReason by remember { mutableStateOf("") }
     var isEmergencyBroadcast by remember { mutableStateOf(true) }
+    var publicPhoneConsent by remember { mutableStateOf(true) }
 
     var expandedBloodMenu by remember { mutableStateOf(false) }
     var expandedDivisionMenu by remember { mutableStateOf(false) }
@@ -150,7 +159,7 @@ fun CreateRequestScreen(
                 },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.Default.ArrowBack, contentDescription = "ফিরে যান")
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface)
@@ -218,13 +227,13 @@ fun CreateRequestScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
+                .imePadding()
                 .padding(horizontal = 16.dp)
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             Spacer(modifier = Modifier.height(4.dp))
 
-            // Urgency Selector
             Text("Urgency Level (জরুরিতা):", style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold))
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 RequestUrgency.entries.forEach { urg ->
@@ -270,7 +279,6 @@ fun CreateRequestScreen(
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
                         )
 
-                        // Blood Group Dropdown
                         ExposedDropdownMenuBox(
                             expanded = expandedBloodMenu,
                             onExpandedChange = { expandedBloodMenu = !expandedBloodMenu },
@@ -301,7 +309,6 @@ fun CreateRequestScreen(
                         }
                     }
 
-                    // Units Required Stepper
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -311,9 +318,9 @@ fun CreateRequestScreen(
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             IconButton(
                                 onClick = { if (unitsRequired > 1) unitsRequired-- },
-                                modifier = Modifier.size(36.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primaryContainer)
+                                modifier = Modifier.size(48.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primaryContainer)
                             ) {
-                                Icon(Icons.Default.Remove, contentDescription = "Decrease")
+                                Icon(Icons.Default.Remove, contentDescription = "কমান")
                             }
                             Text(
                                 text = "$unitsRequired Bag(s)",
@@ -322,9 +329,9 @@ fun CreateRequestScreen(
                             )
                             IconButton(
                                 onClick = { if (unitsRequired < 10) unitsRequired++ },
-                                modifier = Modifier.size(36.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primaryContainer)
+                                modifier = Modifier.size(48.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primaryContainer)
                             ) {
-                                Icon(Icons.Default.Add, contentDescription = "Increase")
+                                Icon(Icons.Default.Add, contentDescription = "বাড়ান")
                             }
                         }
                     }
@@ -491,7 +498,29 @@ fun CreateRequestScreen(
                 }
             }
 
-            // Emergency Broadcast Switch
+            // Explicit consent checkbox for public contactPhone visibility (Phase 8)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                    .clickable { publicPhoneConsent = !publicPhoneConsent }
+                    .padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Checkbox(
+                    checked = publicPhoneConsent,
+                    onCheckedChange = { publicPhoneConsent = it },
+                    modifier = Modifier.testTag("checkbox_req_phone_consent")
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = "আমি সম্মতি দিচ্ছি যে রোগীর জরুরি রক্তের প্রয়োজনে প্রদত্ত যোগাযোগের নম্বরটি রক্তদাতাদের কাছে দৃশ্যমান থাকবে।",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -506,7 +535,7 @@ fun CreateRequestScreen(
                         style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold, color = EmergencyRed)
                     )
                     Text(
-                        text = "Notify medically compatible donors in $district via Firebase Cloud Messaging",
+                        text = "Notify medically compatible donors in $district immediately",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -519,6 +548,12 @@ fun CreateRequestScreen(
 
             Button(
                 onClick = {
+                    if (!publicPhoneConsent) {
+                        scope.launch {
+                            snackbarHostState.showSnackbar("অনুরোধ প্রকাশ করতে যোগাযোগের নম্বর প্রদর্শনের সম্মতিতে টিক দিন।")
+                        }
+                        return@Button
+                    }
                     val age = patientAge.toIntOrNull() ?: 25
                     bloodViewModel.createRequest(
                         patientName = patientName,
@@ -574,6 +609,7 @@ fun RequestDetailScreen(
     onNavigateToRegister: () -> Unit = {}
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val currentUserProfile by authViewModel.currentUserProfile.collectAsState()
     val bloodState by bloodViewModel.uiState.collectAsState()
     val request = bloodState.requests.firstOrNull { it.id == requestId }
@@ -584,6 +620,7 @@ fun RequestDetailScreen(
     var showAcceptConfirm by remember { mutableStateOf(false) }
     var showFulfillConfirm by remember { mutableStateOf(false) }
     var showCancelConfirm by remember { mutableStateOf(false) }
+    var showReportDialog by remember { mutableStateOf(false) }
 
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -610,13 +647,59 @@ fun RequestDetailScreen(
         )
     }
 
+    if (showReportDialog && request != null) {
+        ReportSubmissionDialog(
+            currentUserUid = currentUserProfile?.uid,
+            initialTargetUid = request.id,
+            initialTargetName = "${request.patientName} (${request.hospitalName})",
+            initialTargetType = "BLOOD_REQUEST",
+            targetOwnerUid = request.requesterUid,
+            lockTarget = true,
+            onDismiss = { showReportDialog = false },
+            onSubmit = { tUid, tName, tType, cat, reasonBn, details ->
+                showReportDialog = false
+                authViewModel.submitUserReport(
+                    targetUid = tUid,
+                    targetName = tName,
+                    targetType = tType,
+                    category = cat,
+                    reasonBn = reasonBn,
+                    details = details
+                ) { _, msg ->
+                    scope.launch { snackbarHostState.showSnackbar(msg) }
+                }
+            }
+        )
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text("Request Details", fontWeight = FontWeight.Bold) },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.Default.ArrowBack, contentDescription = "ফিরে যান")
+                    }
+                },
+                actions = {
+                    if (request != null && currentUserProfile?.uid != request.requesterUid) {
+                        IconButton(
+                            onClick = {
+                                if (currentUserProfile != null) {
+                                    showReportDialog = true
+                                } else {
+                                    authPromptMessage = "ভুয়া রিকোয়েস্ট বা ভুল তথ্যের বিরুদ্ধে রিপোর্ট করতে অনুগ্রহ করে লগইন করুন।"
+                                    showAuthPromptDialog = true
+                                }
+                            },
+                            modifier = Modifier.testTag("btn_report_request")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Flag,
+                                contentDescription = "রিকোয়েস্ট রিপোর্ট করুন",
+                                tint = EmergencyRed
+                            )
+                        }
                     }
                 }
             )
@@ -640,7 +723,7 @@ fun RequestDetailScreen(
                 text = {
                     Text(
                         "Are you sure you can donate blood for ${request.patientName} at ${request.hospitalName}?\n\n" +
-                                BloodCompatibilityHelper.CLINICAL_DISCLAIMER_EN
+                            BloodCompatibilityHelper.CLINICAL_DISCLAIMER_EN
                     )
                 },
                 confirmButton = {
@@ -721,7 +804,6 @@ fun RequestDetailScreen(
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // Main Top Card
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(20.dp),
@@ -757,7 +839,6 @@ fun RequestDetailScreen(
                         city = request.city
                     )
 
-                    // Patient Details
                     Surface(
                         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
                         shape = RoundedCornerShape(12.dp),
@@ -799,7 +880,6 @@ fun RequestDetailScreen(
                 }
             }
 
-            // Quick Call / Chat Requester
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(16.dp),
@@ -859,10 +939,29 @@ fun RequestDetailScreen(
                             }
                         }
                     }
+
+                    if (!isOwner) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        OutlinedButton(
+                            onClick = {
+                                if (currentUserProfile != null) {
+                                    showReportDialog = true
+                                } else {
+                                    authPromptMessage = "ভুয়া রিকোয়েস্ট বা ভুল তথ্যের বিরুদ্ধে রিপোর্ট করতে অনুগ্রহ করে লগইন করুন।"
+                                    showAuthPromptDialog = true
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth().testTag("btn_card_report_request"),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Icon(Icons.Default.Flag, contentDescription = null, tint = EmergencyRed, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("ভুয়া রিকোয়েস্ট / ভুল তথ্য রিপোর্ট করুন", color = EmergencyRed)
+                        }
+                    }
                 }
             }
 
-            // Status Actions with Role & Lifecycle Validation
             if (request.status == RequestStatus.PENDING && !isOwner) {
                 Button(
                     onClick = {
@@ -899,12 +998,12 @@ fun RequestDetailScreen(
             if (isOwner && (request.status == RequestStatus.PENDING || isDonorAssigned)) {
                 OutlinedButton(
                     onClick = { showCancelConfirm = true },
-                    modifier = Modifier.fillMaxWidth().height(48.dp).testTag("btn_detail_cancel_request"),
+                    modifier = Modifier.fillMaxWidth().height(50.dp).testTag("btn_detail_cancel_request"),
                     shape = RoundedCornerShape(12.dp)
                 ) {
                     Icon(Icons.Default.Cancel, contentDescription = null, tint = MaterialTheme.colorScheme.error)
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("Cancel This Blood Request", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.SemiBold)
+                    Text("Cancel Blood Request", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold)
                 }
             }
         }

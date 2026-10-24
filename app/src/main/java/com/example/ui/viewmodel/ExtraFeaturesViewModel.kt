@@ -3,13 +3,16 @@ package com.example.ui.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.example.data.firebase.DefaultDirectorySeedData
 import com.example.data.firebase.Resource
 import com.example.data.repository.RoktoSetuRepository
+import com.example.data.repository.RoktoSetuRepository.Companion.toAmbulanceService
+import com.example.data.repository.RoktoSetuRepository.Companion.toBloodBank
+import com.example.data.repository.RoktoSetuRepository.Companion.toBloodDonationCamp
 import com.example.model.AmbulanceService
 import com.example.model.AppLanguage
 import com.example.model.BloodBank
 import com.example.model.BloodDonationCamp
-import com.example.model.BloodGroup
 import com.example.model.Campaign
 import com.example.model.DonationEligibility
 import com.example.model.UserProfile
@@ -17,6 +20,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -31,6 +35,7 @@ data class ExtraFeaturesUiState(
     val camps: List<BloodDonationCamp> = emptyList(),
     val searchQuery: String = "",
     val selectedCity: String = "All",
+    val isLoading: Boolean = false,
     val statusMessage: String? = null
 )
 
@@ -41,237 +46,131 @@ class ExtraFeaturesViewModel(
     private val _uiState = MutableStateFlow(ExtraFeaturesUiState())
     val uiState: StateFlow<ExtraFeaturesUiState> = _uiState.asStateFlow()
 
+    private var banksJob: Job? = null
+    private var ambulancesJob: Job? = null
+    private var campsJob: Job? = null
     private var campaignsJob: Job? = null
-    private var defaultReferenceCamps: List<BloodDonationCamp> = emptyList()
+
+    private var remoteCampsList: List<BloodDonationCamp> = emptyList()
+    private var orgCampaignsList: List<BloodDonationCamp> = emptyList()
 
     init {
-        loadInitialData()
-        observeRemoteCampaigns()
+        if (repository == null) {
+            _uiState.update {
+                it.copy(
+                    bloodBanks = DefaultDirectorySeedData.defaultBloodBanks,
+                    ambulances = DefaultDirectorySeedData.defaultAmbulances,
+                    camps = DefaultDirectorySeedData.defaultCamps
+                )
+            }
+        } else {
+            observeDirectoryStreams()
+        }
     }
 
-    private fun observeRemoteCampaigns() {
+    private fun observeDirectoryStreams() {
         val repo = repository ?: return
         viewModelScope.launch {
             repo.currentUserProfile.collect {
-                campaignsJob?.cancel()
-                campaignsJob = viewModelScope.launch {
-                    repo.getCampaigns().collect { remoteCampaigns ->
-                        val sdf = SimpleDateFormat("dd MMM yyyy", Locale.getDefault())
-                        val mappedRemote = remoteCampaigns.map { c ->
-                            BloodDonationCamp(
-                                id = c.id,
-                                title = c.title,
-                                titleBn = c.title,
-                                organizer = c.organizationName.ifBlank { "Community Blood Drive" },
-                                location = if (c.city.isNotBlank()) "${c.location}, ${c.city}" else c.location,
-                                date = if (c.startDate > 0L) sdf.format(Date(c.startDate)) else "Upcoming",
-                                time = "09:00 AM - 05:00 PM",
-                                contactPhone = c.contactPhone,
-                                targetUnits = c.targetBags,
-                                registeredCount = c.collectedBags,
-                                description = c.description
-                            )
-                        }
-                        val remoteIds = mappedRemote.map { it.id }.toSet()
-                        val merged = mappedRemote + defaultReferenceCamps.filterNot { it.id in remoteIds }
-                        _uiState.update { it.copy(camps = merged) }
-                    }
+                loadBloodBanks()
+                loadAmbulances()
+                loadBloodCampsAndCampaigns()
+            }
+        }
+    }
+
+    private fun loadBloodBanks() {
+        val repo = repository ?: return
+        banksJob?.cancel()
+        banksJob = viewModelScope.launch {
+            repo.getBloodBanks(includeInactive = false).collect { remoteBanks ->
+                if (remoteBanks.isNotEmpty()) {
+                    _uiState.update { it.copy(bloodBanks = remoteBanks) }
+                    repo.cacheBloodBanksLocally(remoteBanks)
+                } else {
+                    val cached = repo.getCachedBloodBanks()
+                        ?.firstOrNull()
+                        ?.map { it.toBloodBank() }
+                        ?.filter { it.isActive }
+                        .orEmpty()
+                    val fallback = if (cached.isNotEmpty()) cached else DefaultDirectorySeedData.defaultBloodBanks
+                    _uiState.update { it.copy(bloodBanks = fallback) }
                 }
             }
         }
     }
 
-    private fun loadInitialData() {
-        val initialBloodBanks = listOf(
-            BloodBank(
-                id = "bb-1",
-                name = "Quantum Foundation Blood Lab",
-                nameBn = "কোয়ান্টাম ফাউন্ডেশন ব্লাড ল্যাব",
-                organization = "Quantum Foundation",
-                address = "31/V Shilpacharya Zainul Abedin Sarak, Shantinagar",
-                city = "Dhaka",
-                phone = "+8801714010869",
-                emergencyHotline = "+88029351969",
-                is24Hours = true,
-                availableGroups = listOf(BloodGroup.A_POSITIVE, BloodGroup.B_POSITIVE, BloodGroup.O_POSITIVE, BloodGroup.AB_POSITIVE, BloodGroup.O_NEGATIVE)
-            ),
-            BloodBank(
-                id = "bb-2",
-                name = "Bangladesh Red Crescent Society Blood Center",
-                nameBn = "বাংলাদেশ রেড ক্রিসেন্ট সোসাইটি রক্ত কেন্দ্র",
-                organization = "BDRCS",
-                address = "7/5 Aurangzeb Road, Mohammadpur",
-                city = "Dhaka",
-                phone = "+8801811458524",
-                emergencyHotline = "+88029116563",
-                is24Hours = true,
-                availableGroups = listOf(BloodGroup.A_POSITIVE, BloodGroup.A_NEGATIVE, BloodGroup.B_POSITIVE, BloodGroup.B_NEGATIVE, BloodGroup.O_POSITIVE)
-            ),
-            BloodBank(
-                id = "bb-3",
-                name = "Sandhani Central Blood Bank - DMCH",
-                nameBn = "সন্ধানী কেন্দ্রীয় রক্ত পরিসঞ্চালন কেন্দ্র - ডিএমসিএইচ",
-                organization = "Sandhani",
-                address = "Dhaka Medical College Hospital, Secretariate Rd",
-                city = "Dhaka",
-                phone = "+8801711223344",
-                emergencyHotline = "+880255165088",
-                is24Hours = true,
-                availableGroups = listOf(BloodGroup.A_POSITIVE, BloodGroup.B_POSITIVE, BloodGroup.AB_POSITIVE, BloodGroup.O_POSITIVE, BloodGroup.AB_NEGATIVE)
-            ),
-            BloodBank(
-                id = "bb-4",
-                name = "Badhan Blood Transfusion Center",
-                nameBn = "বাঁধন রক্ত পরিসঞ্চালন কেন্দ্র",
-                organization = "Badhan (DU)",
-                address = "TSC, University of Dhaka",
-                city = "Dhaka",
-                phone = "+8801534982674",
-                emergencyHotline = "+88029668690",
-                is24Hours = true,
-                availableGroups = listOf(BloodGroup.A_POSITIVE, BloodGroup.B_POSITIVE, BloodGroup.O_POSITIVE, BloodGroup.AB_POSITIVE)
-            ),
-            BloodBank(
-                id = "bb-5",
-                name = "Chittagong Medical College Blood Bank",
-                nameBn = "চট্টগ্রাম মেডিকেল কলেজ ব্লাড ব্যাংক",
-                organization = "CMCH",
-                address = "57 K.B. Fazlul Kader Rd, Chattogram",
-                city = "Chattogram",
-                phone = "+8801819554433",
-                emergencyHotline = "+88031619400",
-                is24Hours = true,
-                availableGroups = listOf(BloodGroup.A_POSITIVE, BloodGroup.B_POSITIVE, BloodGroup.O_POSITIVE)
-            ),
-            BloodBank(
-                id = "bb-6",
-                name = "Rajshahi Medical College Blood Bank",
-                nameBn = "রাজশাহী মেডিকেল কলেজ ব্লাড ব্যাংক",
-                organization = "RMCH",
-                address = "Laxmipur, Rajshahi",
-                city = "Rajshahi",
-                phone = "+8801712998877",
-                emergencyHotline = "+880721772150",
-                is24Hours = true,
-                availableGroups = listOf(BloodGroup.A_POSITIVE, BloodGroup.B_POSITIVE, BloodGroup.O_POSITIVE, BloodGroup.AB_POSITIVE)
-            ),
-            BloodBank(
-                id = "bb-7",
-                name = "Sylhet MAG Osmani Medical Blood Bank",
-                nameBn = "সিলেট এমএজি ওসমানী মেডিকেল ব্লাড ব্যাংক",
-                organization = "SOMCH",
-                address = "Medical Road, Sylhet",
-                city = "Sylhet",
-                phone = "+8801713445566",
-                emergencyHotline = "+880821713667",
-                is24Hours = true,
-                availableGroups = listOf(BloodGroup.A_POSITIVE, BloodGroup.B_POSITIVE, BloodGroup.O_POSITIVE)
-            )
-        )
-
-        val initialAmbulances = listOf(
-            AmbulanceService(
-                id = "amb-1",
-                title = "National Emergency Ambulance (৯৯৯)",
-                titleBn = "জাতীয় জরুরী অ্যাম্বুলেন্স সেবা",
-                provider = "Bangladesh Police & Fire Service",
-                coverageArea = "Nationwide (সারাদেশ)",
-                phone = "999",
-                type = "Government Emergency",
-                isAvailable24x7 = true
-            ),
-            AmbulanceService(
-                id = "amb-2",
-                title = "Red Crescent Emergency Ambulance",
-                titleBn = "রেড ক্রিসেন্ট ইমার্জেন্সি অ্যাম্বুলেন্স",
-                provider = "BDRCS",
-                coverageArea = "Dhaka & Major Divisions",
-                phone = "+8801811458524",
-                type = "ICU & Life Support",
-                isAvailable24x7 = true
-            ),
-            AmbulanceService(
-                id = "amb-3",
-                title = "Alif 24/7 ICU Ambulance Service",
-                titleBn = "আলিফ ২৪/৭ আইসিইউ অ্যাম্বুলেন্স",
-                provider = "Alif Medical Transport",
-                coverageArea = "Dhaka Metropolitan & All Over Bangladesh",
-                phone = "+8801713205555",
-                type = "AC / Freezing / ICU",
-                isAvailable24x7 = true
-            ),
-            AmbulanceService(
-                id = "amb-4",
-                title = "Health Batayon Health & Ambulance Hotline (১৬২৬৩)",
-                titleBn = "স্বাস্থ্য বাতায়ন অ্যাম্বুলেন্স ও ডাক্তার সহায়তা",
-                provider = "Ministry of Health & Family Welfare",
-                coverageArea = "Nationwide Toll-Free",
-                phone = "16263",
-                type = "Govt Telehealth & Referral",
-                isAvailable24x7 = true
-            ),
-            AmbulanceService(
-                id = "amb-5",
-                title = "Shastya Seba 24/7 Ambulance Network",
-                titleBn = "স্বাস্থ্য সেবা ২৪/৭ অ্যাম্বুলেন্স নেটওয়ার্ক",
-                provider = "Shastya Seba Ltd",
-                coverageArea = "Chattogram, Sylhet, Rajshahi",
-                phone = "+8801911123456",
-                type = "Cardiac ICU & General AC",
-                isAvailable24x7 = true
-            )
-        )
-
-        val initialCamps = listOf(
-            BloodDonationCamp(
-                id = "camp-1",
-                title = "Dhaka University Campus Voluntary Blood Drive",
-                titleBn = "ঢাকা বিশ্ববিদ্যালয় স্বেচ্ছায় রক্তদান ক্যাম্প ২০২৬",
-                organizer = "Badhan DU Central Committee",
-                location = "TSC Auditorium, Dhaka University",
-                date = "25 Sep 2026",
-                time = "09:00 AM - 05:00 PM",
-                contactPhone = "+8801534982674",
-                targetUnits = 200,
-                registeredCount = 84,
-                description = "Join us in saving lives at the largest campus-wide blood drive. Free blood group testing for all visitors."
-            ),
-            BloodDonationCamp(
-                id = "camp-2",
-                title = "Sandhani Youth Blood Donation Camp",
-                titleBn = "সন্ধানী যুব রক্তদান ও থ্যালাসেমিয়া সচেতনতা কর্মসূচি",
-                organizer = "Sandhani & Red Crescent",
-                location = "Dhanmondi Lake Amphitheatre, Dhaka",
-                date = "28 Sep 2026",
-                time = "10:00 AM - 06:00 PM",
-                contactPhone = "+8801711223344",
-                targetUnits = 150,
-                registeredCount = 42,
-                description = "Voluntary blood donation campaign focused on helping thalassemia children and cancer patients."
-            ),
-            BloodDonationCamp(
-                id = "camp-3",
-                title = "Chattogram City Life Saver Campaign",
-                titleBn = "চট্টগ্রাম সিটি লাইফ সেভার রক্তদান উৎসব",
-                organizer = "Chattogram Blood Donors Club",
-                location = "MA Aziz Stadium Gate 2, Chattogram",
-                date = "02 Oct 2026",
-                time = "08:30 AM - 04:30 PM",
-                contactPhone = "+8801819554433",
-                targetUnits = 120,
-                registeredCount = 59,
-                description = "Citywide mega donation drive with donor gift packs, certificates, and complimentary health checkup."
-            )
-        )
-
-        defaultReferenceCamps = initialCamps
-        _uiState.update {
-            it.copy(
-                bloodBanks = initialBloodBanks,
-                ambulances = initialAmbulances,
-                camps = initialCamps
-            )
+    private fun loadAmbulances() {
+        val repo = repository ?: return
+        ambulancesJob?.cancel()
+        ambulancesJob = viewModelScope.launch {
+            repo.getAmbulances(includeInactive = false).collect { remoteAmbulances ->
+                if (remoteAmbulances.isNotEmpty()) {
+                    _uiState.update { it.copy(ambulances = remoteAmbulances) }
+                    repo.cacheAmbulancesLocally(remoteAmbulances)
+                } else {
+                    val cached = repo.getCachedAmbulances()
+                        ?.firstOrNull()
+                        ?.map { it.toAmbulanceService() }
+                        ?.filter { it.isActive }
+                        .orEmpty()
+                    val fallback = if (cached.isNotEmpty()) cached else DefaultDirectorySeedData.defaultAmbulances
+                    _uiState.update { it.copy(ambulances = fallback) }
+                }
+            }
         }
+    }
+
+    private fun loadBloodCampsAndCampaigns() {
+        val repo = repository ?: return
+        campsJob?.cancel()
+        campaignsJob?.cancel()
+
+        campsJob = viewModelScope.launch {
+            repo.getBloodCamps(includeInactive = false).collect { camps ->
+                if (camps.isNotEmpty()) {
+                    remoteCampsList = camps
+                    repo.cacheBloodCampsLocally(camps)
+                } else {
+                    val cached = repo.getCachedBloodCamps()
+                        ?.firstOrNull()
+                        ?.map { it.toBloodDonationCamp() }
+                        ?.filter { it.isActive }
+                        .orEmpty()
+                    remoteCampsList = if (cached.isNotEmpty()) cached else DefaultDirectorySeedData.defaultCamps
+                }
+                mergeCampsState()
+            }
+        }
+
+        campaignsJob = viewModelScope.launch {
+            repo.getCampaigns().collect { remoteCampaigns ->
+                val sdf = SimpleDateFormat("dd MMM yyyy", Locale.getDefault())
+                orgCampaignsList = remoteCampaigns.map { c ->
+                    BloodDonationCamp(
+                        id = c.id,
+                        title = c.title,
+                        titleBn = c.title,
+                        organizer = c.organizationName.ifBlank { "রক্তদান সংগঠন" },
+                        location = if (c.city.isNotBlank()) "${c.location}, ${c.city}" else c.location,
+                        district = c.city.ifBlank { "Dhaka" },
+                        date = if (c.startDate > 0L) sdf.format(Date(c.startDate)) else "আসন্ন",
+                        time = "09:00 AM - 05:00 PM",
+                        contactPhone = c.contactPhone,
+                        targetUnits = c.targetBags,
+                        registeredCount = c.collectedBags,
+                        description = c.description
+                    )
+                }
+                mergeCampsState()
+            }
+        }
+    }
+
+    private fun mergeCampsState() {
+        val primaryIds = remoteCampsList.map { it.id }.toSet()
+        val combined = remoteCampsList + orgCampaignsList.filterNot { it.id in primaryIds }
+        _uiState.update { it.copy(camps = combined) }
     }
 
     fun setLanguage(lang: AppLanguage) {
@@ -284,21 +183,69 @@ class ExtraFeaturesViewModel(
     }
 
     fun toggleCampRsvp(campId: String) {
+        val currentCamp = _uiState.value.camps.find { it.id == campId } ?: return
+        val currentlyRsvped = currentCamp.isUserRsvp
+        val repo = repository
+        if (repo == null) {
+            _uiState.update { current ->
+                val updated = current.camps.map { camp ->
+                    if (camp.id == campId) {
+                        val next = !camp.isUserRsvp
+                        val nextCount = if (next) camp.registeredCount + 1 else (camp.registeredCount - 1).coerceAtLeast(0)
+                        camp.copy(isUserRsvp = next, registeredCount = nextCount)
+                    } else camp
+                }
+                current.copy(
+                    camps = updated,
+                    statusMessage = if (!currentlyRsvped) "রক্তদান ক্যাম্পে আপনার অংশগ্রহণ নিশ্চিত হয়েছে!" else "অংশগ্রহণ বাতিল করা হয়েছে।"
+                )
+            }
+            return
+        }
+
+        // Optimistic UI update + persistent Firestore RSVP
         _uiState.update { current ->
-            val updatedCamps = current.camps.map { camp ->
+            val updated = current.camps.map { camp ->
                 if (camp.id == campId) {
-                    val newRsvp = !camp.isUserRsvp
-                    val newCount = if (newRsvp) camp.registeredCount + 1 else (camp.registeredCount - 1).coerceAtLeast(0)
-                    camp.copy(isUserRsvp = newRsvp, registeredCount = newCount)
+                    val next = !currentlyRsvped
+                    val nextCount = if (next) camp.registeredCount + 1 else (camp.registeredCount - 1).coerceAtLeast(0)
+                    camp.copy(isUserRsvp = next, registeredCount = nextCount)
                 } else camp
             }
-            val target = updatedCamps.find { it.id == campId }
-            val msg = if (target?.isUserRsvp == true) {
-                if (current.language == AppLanguage.BANGLA) "রক্তদান ক্যাম্পে আপনার অংশগ্রহণ নিশ্চিত হয়েছে!" else "RSVP confirmed! See you at the camp."
-            } else {
-                if (current.language == AppLanguage.BANGLA) "অংশগ্রহণ বাতিল করা হয়েছে।" else "RSVP removed."
+            current.copy(camps = updated)
+        }
+
+        viewModelScope.launch {
+            when (val res = repo.toggleCampRsvp(campId, currentlyRsvped)) {
+                is Resource.Success -> {
+                    val msg = if (res.data) {
+                        if (_uiState.value.language == AppLanguage.BANGLA) {
+                            "রক্তদান ক্যাম্পে আপনার অংশগ্রহণ স্থায়ীভাবে সংরক্ষিত হয়েছে!"
+                        } else {
+                            "RSVP confirmed and saved!"
+                        }
+                    } else {
+                        if (_uiState.value.language == AppLanguage.BANGLA) {
+                            "ক্যাম্পে অংশগ্রহণ বাতিল করা হয়েছে।"
+                        } else {
+                            "RSVP removed."
+                        }
+                    }
+                    _uiState.update { it.copy(statusMessage = msg) }
+                }
+                is Resource.Error -> {
+                    // Revert optimistic change on failure
+                    _uiState.update { current ->
+                        val reverted = current.camps.map { camp ->
+                            if (camp.id == campId) {
+                                camp.copy(isUserRsvp = currentlyRsvped, registeredCount = currentCamp.registeredCount)
+                            } else camp
+                        }
+                        current.copy(camps = reverted, statusMessage = res.message)
+                    }
+                }
+                is Resource.Loading -> {}
             }
-            current.copy(camps = updatedCamps, statusMessage = msg)
         }
     }
 
@@ -313,12 +260,15 @@ class ExtraFeaturesViewModel(
         description: String
     ) {
         val campId = "camp_${System.currentTimeMillis()}"
+        val repo = repository
+        val district = repo?.currentUserProfile?.value?.location?.district ?: "Dhaka"
         val newCamp = BloodDonationCamp(
             id = campId,
             title = titleBn,
             titleBn = titleBn,
             organizer = organizer,
             location = location,
+            district = district,
             date = date,
             time = time,
             contactPhone = phone,
@@ -327,35 +277,36 @@ class ExtraFeaturesViewModel(
             isUserRsvp = true,
             description = description
         )
-        defaultReferenceCamps = listOf(newCamp) + defaultReferenceCamps
+        remoteCampsList = listOf(newCamp) + remoteCampsList
         _uiState.update { current ->
             current.copy(
                 camps = listOf(newCamp) + current.camps,
                 statusMessage = if (current.language == AppLanguage.BANGLA) "নতুন রক্তদান ক্যাম্প সফলভাবে যোগ করা হয়েছে!" else "New Blood Camp published successfully!"
             )
         }
-        val repo = repository ?: return
-        viewModelScope.launch {
-            val profile = repo.currentUserProfile.value
-            val orgId = profile?.organizationId ?: repo.currentUserId ?: ""
-            if (orgId.isNotBlank()) {
-                repo.createCampaign(
-                    Campaign(
-                        id = campId,
-                        organizationId = orgId,
-                        organizationName = organizer,
-                        title = titleBn,
-                        description = description,
-                        location = location,
-                        city = profile?.location?.district ?: "Dhaka",
-                        startDate = System.currentTimeMillis(),
-                        endDate = System.currentTimeMillis() + 7 * 86400000L,
-                        targetBags = targetUnits.coerceAtLeast(1),
-                        collectedBags = 1,
-                        contactPhone = phone,
-                        isActive = true
+        if (repo != null) {
+            viewModelScope.launch {
+                val profile = repo.currentUserProfile.value
+                val orgId = profile?.organizationId ?: repo.currentUserId ?: ""
+                if (orgId.isNotBlank()) {
+                    repo.createCampaign(
+                        Campaign(
+                            id = campId,
+                            organizationId = orgId,
+                            organizationName = organizer,
+                            title = titleBn,
+                            description = description,
+                            location = location,
+                            city = district,
+                            startDate = System.currentTimeMillis(),
+                            endDate = System.currentTimeMillis() + 7 * 86400000L,
+                            targetBags = targetUnits.coerceAtLeast(1),
+                            collectedBags = 1,
+                            contactPhone = phone,
+                            isActive = true
+                        )
                     )
-                )
+                }
             }
         }
     }
@@ -386,7 +337,7 @@ class ExtraFeaturesViewModel(
             )
         }
 
-        val requiredIntervalMs = TimeUnit.DAYS.toMillis(90) // 90 days interval
+        val requiredIntervalMs = TimeUnit.DAYS.toMillis(90)
         val nextEligibleDateMs = lastDateMs + requiredIntervalMs
         val currentMs = System.currentTimeMillis()
 
@@ -417,11 +368,11 @@ class ExtraFeaturesViewModel(
         contact: String
     ): String {
         return "URGENT BLOOD NEEDED!\n" +
-                "Blood Group: $patientBloodGroup\n" +
-                "Patient: $patientName ($units Bag/s)\n" +
-                "Hospital: $hospital, $city\n" +
-                "Emergency Contact: $contact\n" +
-                "Sent via RoktoSetu App. Please call immediately if you or someone you know can donate!"
+            "Blood Group: $patientBloodGroup\n" +
+            "Patient: $patientName ($units Bag/s)\n" +
+            "Hospital: $hospital, $city\n" +
+            "Emergency Contact: $contact\n" +
+            "Sent via RoktoSetu App. Please call immediately if you or someone you know can donate!"
     }
 }
 

@@ -26,4 +26,19 @@
     <string name="verification_upload_submit">আপলোড ও জমা দিন</string>
     <string name="donor_card_saved_success">ডোনার কার্ড ছবি হিসেবে গ্যালারিতে সংরক্ষিত হয়েছে!</string>
     <string name="donor_card_saved_error">ছবি সংরক্ষণ করা যায়নি। পুনরায় চেষ্টা করুন।</string>
+
+    <!-- Admin Announcement Banner Strings (Bengali) -->
+    <string name="announcement_banner_header">প্রশাসনিক ঘোষণা</string>
+    <string name="announcement_dismiss_desc">ঘোষণা বন্ধ করুন</string>
+    <string name="announcement_category_emergency">জরুরি</string>
+    <string name="announcement_category_maintenance">রক্ষণাবেক্ষণ</string>
+    <string name="announcement_category_campaign">ক্যাম্পেইন</string>
+    <string name="announcement_category_general">বিজ্ঞপ্তি</string>
+    <string name="announcement_target_all">সবার জন্য</string>
+    <string name="announcement_target_donors">শুধু রক্তদাতাদের জন্য</string>
+    <string name="announcement_target_verified_donors">যাচাইকৃত রক্তদাতা</string>
+    <string name="announcement_target_organizations">প্রতিষ্ঠানসমূহ</string>
+    <string name="announcement_target_district_format">জেলা: %1$s</string>
+    <string name="btn_retry">আবার চেষ্টা করুন</string>
 </resources>
+
