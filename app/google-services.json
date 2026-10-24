@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "334739914717",
+    "project_id": "gen-lang-client-0314627405",
+    "storage_bucket": "gen-lang-client-0314627405.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:334739914717:android:d54a98d6874e2c39abc034",
+        "android_client_info": {
+          "package_name": "com.aistudio.roktosetu.app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "334739914717-1dre497rjrfrbvkr8h59qvp4ef3vvhi6.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.aistudio.roktosetu.app",
+            "certificate_hash": "6f9de3019e3d2ab2b0a6e115310c5052c834f43b"
+          }
+        },
+        {
+          "client_id": "334739914717-af184lsohudgdcvtjd1p1d3qg7r8oooe.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBR8O1zEf3L6i9qA_jwiGOAtd_sO_nJCEs"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "334739914717-af184lsohudgdcvtjd1p1d3qg7r8oooe.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
